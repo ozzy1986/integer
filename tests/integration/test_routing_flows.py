@@ -3,6 +3,7 @@
 import asyncio
 
 import httpx
+import pytest
 
 from tests.integration.conftest import Harness, raises, status
 
@@ -102,8 +103,9 @@ class TestSynchronousErrors:
         assert (await harness.task(task_id))["status"] == "failed"
         assert await harness.ledger_kinds(user_id) == ["payment", "charge", "refund"]
 
-    async def test_4xx_means_the_request_itself_is_bad(self, harness: Harness) -> None:
-        harness.stub.script("alpha", status(422))
+    @pytest.mark.parametrize("code", [400, 413, 415, 422])
+    async def test_4xx_about_the_request_itself_means_payload(self, harness: Harness, code: int) -> None:
+        harness.stub.script("alpha", status(code))
         user_id = await harness.new_user(tokens=10)
         task_id = await harness.start_task(user_id)
 
@@ -111,9 +113,24 @@ class TestSynchronousErrors:
         assert (task["status"], task["error"], task["attempts"][0]["reason"]) == (
             "failed",
             "payload",
-            "http_422",
+            f"http_{code}",
         )
         assert harness.stub.providers_called() == ["alpha"]
+
+    @pytest.mark.parametrize("code", [401, 403, 404, 408, 409, 429])
+    async def test_other_4xx_is_the_providers_trouble_and_moves_on(self, harness: Harness, code: int) -> None:
+        # Rate limiting, a timeout or our misconfigured credentials for one provider say nothing about the
+        # request: another leg may well take it.
+        harness.stub.script("alpha", status(code))
+        user_id = await harness.new_user(tokens=10)
+        task_id = await harness.start_task(user_id)
+        await harness.dispatch()
+
+        task = await harness.task(task_id)
+        assert [(a["provider"], a["status"], a["error"], a["reason"]) for a in task["attempts"]] == [
+            ("alpha", "failed", "technical", f"http_{code}"),
+            ("beta", "sent", None, None),
+        ]
 
     async def test_202_without_external_id_is_a_technical_failure(self, harness: Harness) -> None:
         harness.stub.script("alpha", lambda request: httpx.Response(202, json={}))

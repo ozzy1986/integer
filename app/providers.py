@@ -11,6 +11,11 @@ import httpx
 
 from app.domain import ProviderError
 
+# Only these 4xx say "the request itself is malformed", which any leg would reject (rule 2's `payload`).
+# The rest — 401/403 (our credentials for this provider), 404, 408 (timeout), 409, 429 (rate limit) — are
+# this provider's trouble, so the next leg may well succeed.
+_PAYLOAD_STATUSES = frozenset({400, 413, 415, 422})
+
 
 @dataclass(frozen=True, slots=True)
 class Submission:
@@ -54,10 +59,10 @@ class ProviderGateway:
         except httpx.TransportError as exc:
             raise SubmitFailed(ProviderError.TECHNICAL, "connect_error") from exc
 
-        if response.status_code >= 500:
-            raise SubmitFailed(ProviderError.TECHNICAL, f"http_{response.status_code}")
-        if response.status_code >= 400:
+        if response.status_code in _PAYLOAD_STATUSES:
             raise SubmitFailed(ProviderError.PAYLOAD, f"http_{response.status_code}")
+        if response.status_code >= 400:
+            raise SubmitFailed(ProviderError.TECHNICAL, f"http_{response.status_code}")
         try:
             external_id = response.json()["external_id"]
         except (ValueError, KeyError, TypeError) as exc:
