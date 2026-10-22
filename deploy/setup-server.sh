@@ -9,23 +9,22 @@ mkdir -p "$ROOT/acme" "$ROOT/releases" "$ROOT/shared"
 chmod 755 "$ROOT" "$ROOT/acme" "$ROOT/releases"
 chmod 700 "$ROOT/shared"
 
-# Secrets are generated once on the server and never leave it.
-if [ ! -f "$ROOT/shared/.env" ]; then
-  secret() { python3 -c 'import secrets; print(secrets.token_urlsafe(48))'; }
-  umask 077
-  cat > "$ROOT/shared/.env" <<EOF
-POSTGRES_PASSWORD=$(secret)
-ALPHA_SECRET=$(secret)
-BETA_SECRET=$(secret)
-PAYMENTS_SECRET=$(secret)
-FAKE_CONTROL_TOKEN=$(secret)
-APP_BIND=127.0.0.1
-APP_PORT=8121
-PROVIDER_TIMEOUT=60
-EOF
-  echo "generated $ROOT/shared/.env"
-fi
-chmod 600 "$ROOT/shared/.env"
+# Secrets are generated once on the server and never leave it. A setting introduced by a later release is
+# appended to the existing file, so redeploying an old server just adds what is missing.
+ENV_FILE=$ROOT/shared/.env
+(umask 077 && touch "$ENV_FILE")
+chmod 600 "$ENV_FILE"
+secret() { python3 -c 'import secrets; print(secrets.token_urlsafe(48))'; }
+ensure() { grep -q "^$1=" "$ENV_FILE" || { echo "$1=$2" >> "$ENV_FILE"; echo "added $1 to $ENV_FILE"; }; }
+ensure POSTGRES_PASSWORD "$(secret)"
+ensure APP_DB_PASSWORD "$(secret)"
+ensure ALPHA_SECRET "$(secret)"
+ensure BETA_SECRET "$(secret)"
+ensure PAYMENTS_SECRET "$(secret)"
+ensure FAKE_CONTROL_TOKEN "$(secret)"
+ensure APP_BIND 127.0.0.1
+ensure APP_PORT 8121
+ensure PROVIDER_TIMEOUT 60
 
 install -m 644 "$HERE/apache/$DOMAIN.conf" "/etc/apache2/sites-available/$DOMAIN.conf"
 a2ensite -q "$DOMAIN"

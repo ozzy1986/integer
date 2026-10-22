@@ -65,9 +65,15 @@ class ProviderStub:
         return [provider for provider, _ in self.calls]
 
 
+def as_service_role(db_url: str) -> str:
+    """Connect the app under test as in production: with the `integer_app` role's privileges only, so every
+    integration test also proves the role has all the GRANTs the service needs (and nothing more is used)."""
+    return f"{db_url}{'&' if '?' in db_url else '?'}options=-c%20role%3Dinteger_app"
+
+
 def make_settings(db_url: str, **overrides: Any) -> Settings:
     values: dict[str, Any] = {
-        "database_url": db_url,
+        "database_url": as_service_role(db_url),
         "provider_urls": {name: f"http://{name}.test" for name in PROVIDER_SECRETS},
         "provider_secrets": PROVIDER_SECRETS,
         "payments_secret": PAYMENTS_SECRET,

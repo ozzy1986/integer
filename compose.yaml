@@ -11,7 +11,8 @@ x-secrets: &secrets
 
 x-service-env: &service-env
   <<: *secrets
-  DATABASE_URL: postgresql://integer:${POSTGRES_PASSWORD:-integer-dev-password}@db:5432/integer
+  # Not the owner: integer_app (migration 0003) cannot switch triggers off or touch the ledger's history.
+  DATABASE_URL: postgresql://integer_app:${APP_DB_PASSWORD:-dev-only-app-db-password-0000000}@db:5432/integer
   PROVIDER_URLS: '{"alpha": "http://fake-providers:9000/alpha", "beta": "http://fake-providers:9000/beta"}'
   PROVIDER_TIMEOUT: ${PROVIDER_TIMEOUT:-60}
   DEMO_PAYMENTS_URL: http://fake-providers:9000/payments
@@ -50,9 +51,11 @@ services:
 
   migrate:
     build: *runtime-build
-    command: ["alembic", "upgrade", "head"]
+    # The owner migrates the schema, then lets the service role log in (its password never enters a revision).
+    command: ["sh", "-c", "alembic upgrade head && python migrations/service_login.py"]
     environment:
       DATABASE_URL: postgresql://integer:${POSTGRES_PASSWORD:-integer-dev-password}@db:5432/integer
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-dev-only-app-db-password-0000000}
     depends_on:
       db: {condition: service_healthy}
     <<: *hardening

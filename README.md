@@ -176,6 +176,11 @@ stateDiagram-v2
   на задачу. Возврат обязан совпадать со списанием, баланс не может стать отрицательным.
 - Баланс двигает именно `AFTER`-триггер: он срабатывает только для реально вставленных строк, поэтому
   `INSERT … ON CONFLICT DO NOTHING` не оставляет лишнего изменения баланса.
+- Сервис ходит в базу не владельцем, а ролью `integer_app` ([`0003_service_role.py`](migrations/versions/0003_service_role.py)):
+  без DDL, без `UPDATE`/`DELETE` журнала, `UPDATE` только тех колонок, которые двигает машина состояний.
+  Суперпользователь мог бы выключить триггеры (`session_replication_role`, `DISABLE TRIGGER`), эта роль — нет,
+  так что инварианты держатся даже против взломанного сервиса. Все интеграционные тесты гоняют приложение
+  именно под этой ролью.
 
 **Начисление.** Вебхук оплаты в одной транзакции блокирует пользователя, вставляет платёж
 (`ON CONFLICT DO NOTHING`), блокирует его строку (`FOR UPDATE`) и сверяет пользователя и сумму (иначе
@@ -231,24 +236,29 @@ stateDiagram-v2
 
 Alembic, схема — чистым SQL ([`migrations/versions`](migrations/versions)). В compose миграции применяет
 отдельный одноразовый контейнер `migrate` до старта сервиса, поэтому 4 воркера не гоняются за схемой.
-Параллельный запуск двух `alembic upgrade` тоже безопасен: `env.py` берёт advisory lock.
+Параллельный запуск двух `alembic upgrade` тоже безопасен: `env.py` берёт advisory lock. Миграции идут от
+владельца базы, а после них [`service_login.py`](migrations/service_login.py) разрешает роли сервиса
+`integer_app` входить с паролем `APP_DB_PASSWORD` — так пароль не попадает ни в одну ревизию.
 
 ```bash
 docker compose run --rm migrate                         # применить (то же делает docker compose up)
-DATABASE_URL=postgresql://… alembic upgrade head       # без Docker
+DATABASE_URL=postgresql://<владелец>@… alembic upgrade head      # без Docker
+DATABASE_URL=postgresql://<владелец>@… APP_DB_PASSWORD=… python migrations/service_login.py
 alembic downgrade -1                                    # откатить последнюю
 ```
 
 Как добавить следующую:
 
 ```bash
-alembic revision -m "add task priority" --rev-id 0003
-# заполнить upgrade()/downgrade() в migrations/versions/0003_add_task_priority.py, затем:
+alembic revision -m "add task priority" --rev-id 0004
+# заполнить upgrade()/downgrade() в migrations/versions/0004_add_task_priority.py, затем:
 alembic upgrade head
 ```
 
-Тесты на каждой сессии проходят `upgrade → downgrade → upgrade`, так что сломанный `downgrade` тоже
-не пройдёт CI. Каталог моделей лежит в миграции `0002_catalog.py`.
+Новой таблице в той же миграции нужны `GRANT` для `integer_app`: забытый `GRANT` поймает тест
+`test_every_table_is_readable_by_the_service_role`. Тесты на каждой сессии проходят
+`upgrade → downgrade → upgrade`, так что сломанный `downgrade` тоже не пройдёт CI. Каталог моделей лежит в
+миграции `0002_catalog.py`.
 
 ## Фейковые провайдеры
 
@@ -314,7 +324,8 @@ alembic upgrade head
 `releases/<время>-<sha>`, образы собираются **до** переключения (сломанная сборка не трогает работающий
 релиз), затем `current` переключается и стек поднимается с `--wait`, после — проверка `/health`.
 `deploy/deploy.sh --rollback` возвращает предыдущий релиз (миграции базы при этом не откатываются).
-Секреты генерируются на сервере один раз (`shared/.env`, права 600) и в репозиторий не попадают.
+Секреты генерируются на сервере один раз (`shared/.env`, права 600) и в репозиторий не попадают; если новый
+релиз требует новую настройку, `setup-server.sh` дописывает в файл только недостающее.
 
 ## Принятые решения и допущения
 
