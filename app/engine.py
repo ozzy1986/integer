@@ -149,6 +149,14 @@ async def create_task(conn: Connection, request: GenerateRequest, max_active: in
     return CreatedTask(task_id, created=True)
 
 
+async def find_attempt(conn: Connection, provider: str, external_id: str) -> UUID | None:
+    """The provider's attempt it knows by `external_id`; None if there is none, or more than one (its bug)."""
+    rows = await conn.fetch(
+        "SELECT id FROM attempts WHERE provider = $1 AND external_id = $2 LIMIT 2", provider, external_id
+    )
+    return rows[0]["id"] if len(rows) == 1 else None
+
+
 async def mark_sent(conn: Connection, attempt_id: UUID, external_id: str, watchdog_seconds: float) -> Outcome:
     """The provider accepted the attempt (202): start the watchdog clock."""
     async with conn.transaction():

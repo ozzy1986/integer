@@ -17,12 +17,18 @@ async def provider_webhook(name: str, request: Request, services: ServicesDep) -
     payload = await signed_payload(request, secret.get_secret_value(), ProviderWebhookIn)
 
     async with services.pool.acquire() as conn:
-        if payload.status == "completed":
+        attempt_id = payload.attempt_id
+        if attempt_id is None:
+            assert payload.external_id is not None  # type narrowing: the model validator requires one of them
+            attempt_id = await engine.find_attempt(conn, name, payload.external_id)
+        if attempt_id is None:
+            outcome = engine.Outcome.UNKNOWN
+        elif payload.status == "completed":
             assert payload.result_url is not None  # type narrowing: the model validator requires it
-            outcome = await engine.complete_attempt(conn, payload.attempt_id, payload.result_url, provider=name)
+            outcome = await engine.complete_attempt(conn, attempt_id, payload.result_url, provider=name)
         else:
             assert payload.error_type is not None  # type narrowing: the model validator requires it
-            outcome = await engine.fail_attempt(conn, payload.attempt_id, payload.error_type, "webhook", provider=name)
+            outcome = await engine.fail_attempt(conn, attempt_id, payload.error_type, "webhook", provider=name)
 
     if outcome is engine.Outcome.UNKNOWN:
         raise HTTPException(404, "unknown attempt")

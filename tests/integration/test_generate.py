@@ -56,6 +56,17 @@ async def test_references_are_not_required_to_be_urls(harness: Harness) -> None:
     assert (await harness.task(response.json()["task_id"]))["ref_images"] == ["img1.png", "s3://bucket/ref.jpg"]
 
 
+@pytest.mark.parametrize("refs", [{"ref_images": None}, {}])
+async def test_null_or_missing_references_mean_none(harness: Harness, refs: dict[str, None]) -> None:
+    user_id = await harness.new_user(tokens=10)
+    body = {"user_id": user_id, "model_slug": "image-fast", "prompt": "a cat", **refs}
+
+    response = await harness.client.post("/generate", json=body)
+
+    assert response.status_code == 202
+    assert (await harness.task(response.json()["task_id"]))["ref_images"] == []
+
+
 async def test_not_enough_tokens_is_402_and_nothing_is_written(harness: Harness) -> None:
     user_id = await harness.new_user(tokens=24)
 
