@@ -1,0 +1,110 @@
+# docker compose up        -> database, migrations, the service (4 workers), fake providers
+# docker compose run --rm tests                 -> all tests (unit, integration, e2e against this stack)
+#
+# Secrets have development defaults so `docker compose up` works out of the box.
+# Anywhere real, put your own values into .env (see .env.example); deploy/ does that on the server.
+name: integer
+
+x-secrets: &secrets
+  PROVIDER_SECRETS: '{"alpha": "${ALPHA_SECRET:-dev-only-alpha-webhook-secret-0000000000}", "beta": "${BETA_SECRET:-dev-only-beta-webhook-secret-00000000000}"}'
+  PAYMENTS_SECRET: ${PAYMENTS_SECRET:-dev-only-payments-webhook-secret-00000000}
+
+x-service-env: &service-env
+  <<: *secrets
+  DATABASE_URL: postgresql://integer:${POSTGRES_PASSWORD:-integer-dev-password}@db:5432/integer
+  PROVIDER_URLS: '{"alpha": "http://fake-providers:9000/alpha", "beta": "http://fake-providers:9000/beta"}'
+  PROVIDER_TIMEOUT: ${PROVIDER_TIMEOUT:-60}
+  DEMO_PAYMENTS_URL: http://fake-providers:9000/payments
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+# The image is multi-stage; without an explicit target compose would build the last (test) stage.
+x-runtime-build: &runtime-build
+  context: .
+  target: runtime
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: integer
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-integer-dev-password}
+      POSTGRES_DB: integer
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U integer -d integer"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    restart: unless-stopped
+
+  migrate:
+    build: *runtime-build
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql://integer:${POSTGRES_PASSWORD:-integer-dev-password}@db:5432/integer
+    depends_on:
+      db: {condition: service_healthy}
+    <<: *hardening
+    restart: "no"
+
+  app:
+    build: *runtime-build
+    environment:
+      <<: *service-env
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8000}:8000"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      fake-providers: {condition: service_healthy}
+    <<: *hardening
+    mem_limit: 400m
+    restart: unless-stopped
+
+  fake-providers:
+    build: *runtime-build
+    command: ["uvicorn", "fake_providers.app:create_fake_app", "--factory", "--host", "0.0.0.0", "--port", "9000",
+              "--no-server-header"]
+    environment:
+      <<: *secrets
+      SERVICE_URL: http://app:8000
+      FAKE_CONTROL_TOKEN: ${FAKE_CONTROL_TOKEN:-dev-only-control-token-000000000000000000}
+      FAKE_DEFAULT_BEHAVIOUR:  # optional JSON, e.g. {"fail_rate": 0.2}; passed through from the shell or .env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=2).status != 200)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    <<: *hardening
+    mem_limit: 150m
+    restart: unless-stopped
+
+  tests:
+    profiles: [test]
+    build:
+      context: .
+      target: test
+    environment:
+      <<: *secrets
+      TEST_DATABASE_URL: postgresql://integer:${POSTGRES_PASSWORD:-integer-dev-password}@db:5432/integer_test
+      E2E_BASE_URL: http://app:8000
+      E2E_FAKE_URL: http://fake-providers:9000
+      E2E_CONTROL_TOKEN: ${FAKE_CONTROL_TOKEN:-dev-only-control-token-000000000000000000}
+      E2E_PROVIDER_TIMEOUT: ${PROVIDER_TIMEOUT:-60}
+      PYTEST_ADDOPTS: -p no:cacheprovider
+    depends_on:
+      app: {condition: service_healthy}
+    <<: *hardening
+
+volumes:
+  pgdata:

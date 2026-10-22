@@ -63,8 +63,9 @@ async def stack(migrated_db: str) -> AsyncIterator[Stack]:
         make_settings(
             migrated_db,
             provider_urls={name: f"http://fake.test/{name}" for name in PROVIDER_SECRETS},
-            provider_timeout=0.3,
-            send_timeout=0.5,
+            # Generous enough for a busy 1-CPU CI box, short enough to keep the suite fast.
+            provider_timeout=1.0,
+            send_timeout=1.5,
             demo_payments_url="http://fake.test/payments",
             demo_max_topup=100,
         ),
@@ -75,7 +76,7 @@ async def stack(migrated_db: str) -> AsyncIterator[Stack]:
             service_url="http://service.test",
             provider_secrets=PROVIDER_SECRETS,
             payments_secret=PAYMENTS_SECRET,
-            default_behaviour={"delay_min": 0, "delay_max": 0, "late_delay": 0.6, "sync_timeout_seconds": 1},
+            default_behaviour={"delay_min": 0, "delay_max": 0, "late_delay": 1.6, "sync_timeout_seconds": 3},
             retry_backoff=0,
         ),
         service_transport=httpx.ASGITransport(app=service),
@@ -162,7 +163,7 @@ async def test_dropped_webhook_is_handled_by_the_watchdog(stack: Stack) -> None:
     await stack.topup(user_id, 10)
     task_id = await stack.generate(user_id, "@alpha:drop")
     await stack.settle(rounds=1)
-    await asyncio.sleep(0.4)  # past PROVIDER_TIMEOUT
+    await asyncio.sleep(1.1)  # past PROVIDER_TIMEOUT
     await stack.settle()
 
     task = await stack.task(task_id)
@@ -173,11 +174,11 @@ async def test_dropped_webhook_is_handled_by_the_watchdog(stack: Stack) -> None:
 async def test_late_completed_after_watchdog_is_accepted_while_task_runs(stack: Stack) -> None:
     user_id = new_user_id()
     await stack.topup(user_id, 10)
-    task_id = await stack.generate(user_id, "@alpha:late @beta:delay=3")
+    task_id = await stack.generate(user_id, "@alpha:late @beta:delay=5")
     await stack.app.state.services.dispatcher.run_once()
-    await asyncio.sleep(0.4)
+    await asyncio.sleep(1.1)
     assert await stack.app.state.services.watchdog.run_once() == 1
-    await stack.app.state.services.dispatcher.run_once()  # beta takes 3 s; alpha's late result comes at 0.6 s
+    await stack.app.state.services.dispatcher.run_once()  # beta takes 5 s; alpha's late result comes at 1.6 s
     await stack.world.drain()
 
     task = await stack.task(task_id)

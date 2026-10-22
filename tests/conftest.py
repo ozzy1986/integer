@@ -9,6 +9,7 @@ import os
 import secrets
 from collections.abc import AsyncIterator
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import asyncpg
 import pytest
@@ -36,6 +37,9 @@ def database_url() -> str:
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         pytest.exit("TEST_DATABASE_URL is not set (see README: running tests)", returncode=2)
+    # The session starts with DROP SCHEMA: refuse anything that does not look like a test database.
+    if not urlsplit(url).path.rstrip("/").endswith("_test"):
+        pytest.exit("TEST_DATABASE_URL must point to a database whose name ends with _test", returncode=2)
     return url
 
 

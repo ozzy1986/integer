@@ -25,6 +25,7 @@ def test_directives_for_other_providers_are_ignored() -> None:
         ("@alpha:dupseq=3", {"duplicates": 3, "duplicates_concurrent": False}),
         ("@alpha:drop", {"drop_rate": 1.0}),
         ("@alpha:late", {"late_rate": 1.0}),
+        ("@alpha:late=130", {"late_rate": 1.0, "late_delay": 130.0}),
         ("@alpha:delay=3.5", {"delay_min": 3.5, "delay_max": 3.5}),
         ("@alpha:ok", {"fail_rate": 0.0, "sync_fail_rate": 0.0, "drop_rate": 0.0, "late_rate": 0.0}),
     ],

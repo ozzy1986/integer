@@ -7,7 +7,7 @@ Directives let a test or the demo UI script one task without touching global set
     @<provider>:sync=503|timeout                       fail the POST /tasks itself
     @<provider>:dup=N / dupseq=N                       deliver the webhook N times, concurrently / one by one
     @<provider>:drop                                   never deliver the webhook
-    @<provider>:late                                   deliver `completed` after the service stopped waiting
+    @<provider>:late[=S]                               deliver `completed` after the service stopped waiting
     @<provider>:delay=S                                deliver after exactly S seconds
     @<provider>:ok                                     succeed, whatever the global settings say
 """
@@ -59,7 +59,7 @@ def _directive_update(key: str, value: str | None) -> dict[str, Any] | None:
         case "drop":
             return {"drop_rate": 1.0}
         case "late":
-            return {"late_rate": 1.0}
+            return {"late_rate": 1.0, "late_delay": value} if value else {"late_rate": 1.0}
         case "delay":
             return {"delay_min": value, "delay_max": value} if value else None
         case "ok":

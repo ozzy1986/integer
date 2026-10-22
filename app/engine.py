@@ -323,4 +323,4 @@ async def _event(conn: Connection, task_id: UUID, attempt_id: UUID | None, kind:
         "INSERT INTO task_events (task_id, attempt_id, kind, detail) VALUES ($1, $2, $3, $4)",
         task_id, attempt_id, kind, detail,
     )  # fmt: skip
-    log.info("task %s: %s %s", task_id, kind, detail)
+    log.info("task %s: %s %s", task_id, kind, json.dumps(detail, ensure_ascii=False))

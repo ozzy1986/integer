@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     demo_payments_url: str | None = None
     demo_max_topup: int = Field(1000, ge=1)
 
+    @field_validator("telegram_bot_token", "demo_payments_url", mode="before")
+    @classmethod
+    def _empty_means_unset(cls, value: object) -> object:
+        # docker compose turns `${VAR:-}` into an empty string; that must mean "off", not "on with ''".
+        return None if value == "" else value
+
     @field_validator("provider_secrets")
     @classmethod
     def _every_provider_has_a_secret(cls, secrets: dict[str, SecretStr]) -> dict[str, SecretStr]:
