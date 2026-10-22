@@ -1,6 +1,7 @@
 """The fake providers' HTTP behaviour: what the service will see from them."""
 
 import json
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -39,15 +40,15 @@ def receiver() -> Receiver:
 
 @asynccontextmanager
 async def running_fake(receiver: Receiver, **overrides: Any) -> AsyncIterator[tuple[httpx.AsyncClient, Any]]:
-    settings = FakeSettings(
-        service_url="http://service.test",
-        provider_secrets=SECRETS,
-        payments_secret=PAYMENTS_SECRET,
-        control_token=CONTROL_TOKEN,
-        default_behaviour={"delay_min": 0, "delay_max": 0},
-        retry_backoff=0,
-        **overrides,
-    )
+    defaults: dict[str, Any] = {
+        "service_url": "http://service.test",
+        "provider_secrets": SECRETS,
+        "payments_secret": PAYMENTS_SECRET,
+        "control_token": CONTROL_TOKEN,
+        "default_behaviour": {"delay_min": 0, "delay_max": 0},
+        "retry_backoff": 0,
+    }
+    settings = FakeSettings(**{**defaults, **overrides})
     app = create_fake_app(settings, service_transport=httpx.MockTransport(receiver.handler))
     async with (
         app.router.lifespan_context(app),
@@ -154,6 +155,19 @@ async def test_failed_delivery_is_retried_like_a_real_provider(fake: Any, receiv
     await submit(client)
     await world.drain()
     assert len(receiver.requests) == 3
+
+
+async def test_a_delivery_that_keeps_failing_gives_up_without_a_last_useless_pause(receiver: Receiver) -> None:
+    # Pauses go between tries (0.2 + 0.4 + 0.8 s), not after the last one: that one used to add 1.6 s more.
+    receiver.codes = [503] * 4
+    async with running_fake(receiver, retry_backoff=0.2) as (client, _):
+        started = time.monotonic()
+        response = await client.post("/payments/pay", json={"user_id": 7, "tokens": 5})
+        elapsed = time.monotonic() - started
+
+    assert response.json()["delivered"] == [503]
+    assert len(receiver.requests) == 4
+    assert 1.4 <= elapsed < 2.4
 
 
 async def test_4xx_from_the_service_is_not_retried(fake: Any, receiver: Receiver) -> None:

@@ -109,6 +109,8 @@ class World:
         """Like a real provider: retry 5xx and network errors with backoff, give up on 4xx."""
         code = 0
         for attempt in range(MAX_DELIVERY_TRIES):
+            if attempt:  # pause between tries only: after the last one there is nothing left to wait for
+                await asyncio.sleep(self.settings.retry_backoff * 2 ** (attempt - 1))
             try:
                 response = await self.http.post(f"{self.settings.service_url}{path}", content=body, headers=headers)
                 code = response.status_code
@@ -117,7 +119,6 @@ class World:
             except httpx.TransportError as exc:
                 log.warning("delivery to %s failed: %r", path, exc)
                 code = 0
-            await asyncio.sleep(self.settings.retry_backoff * 2**attempt)
         return code
 
     async def run_job(self, provider: str, task: TaskIn, external_id: str, behaviour: Behaviour) -> None:
