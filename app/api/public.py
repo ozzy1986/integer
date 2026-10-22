@@ -8,7 +8,7 @@ import asyncpg
 from fastapi import APIRouter, Header, HTTPException, Path, Query, Response
 
 from app import catalog, engine
-from app.api.deps import ServicesDep, VerifiedUser, authorize
+from app.api.deps import RateLimited, ServicesDep, VerifiedUser, authorize
 from app.domain import LIVE_ATTEMPT_STATUSES, TaskStatus
 from app.schemas import (
     AttemptOut,
@@ -45,13 +45,14 @@ _TASK = """
 @router.post(
     "/generate",
     status_code=202,
+    dependencies=[RateLimited],
     responses={
         200: {"description": "Idempotency-Key replay: the task created by the first request"},
         400: {"description": "No leg accepts that many reference images"},
         402: {"description": "Not enough tokens"},
         404: {"description": "Unknown model"},
         409: {"description": "Idempotency-Key reused for a different request"},
-        429: {"description": "The user already has the maximum number of active tasks"},
+        429: {"description": "The user already has the maximum number of active tasks (or RATE_LIMIT_PER_MINUTE)"},
     },
 )
 async def generate(
@@ -169,6 +170,6 @@ async def health(services: ServicesDep) -> HealthOut:
 
 @router.get("/health/invariants")
 async def invariants(services: ServicesDep) -> dict[str, int]:
-    """Rule 8 as a live check: users whose balance differs from the sum of their ledger (must be 0)."""
-    drift: int = await services.pool.fetchval("SELECT count(*) FROM balance_drift")
-    return {"balance_drift": drift}
+    """Rule 8 as a live check: users whose balance differs from the sum of their ledger (must be 0).
+    Public and a full scan of the ledger, so each worker recomputes it at most every few seconds."""
+    return {"balance_drift": await services.balance_drift.get()}

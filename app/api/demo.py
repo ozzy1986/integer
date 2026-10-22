@@ -7,13 +7,13 @@ fake provider to send them, optionally many identical copies at once to show the
 import httpx
 from fastapi import APIRouter, HTTPException
 
-from app.api.deps import ServicesDep, VerifiedUser, authorize
+from app.api.deps import RateLimited, ServicesDep, VerifiedUser, authorize
 from app.schemas import TopUpIn, TopUpOut
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
 
-@router.post("/topup")
+@router.post("/topup", dependencies=[RateLimited])
 async def topup(body: TopUpIn, services: ServicesDep, verified: VerifiedUser) -> TopUpOut:
     authorize(verified, body.user_id)
     if body.tokens > services.settings.demo_max_topup:

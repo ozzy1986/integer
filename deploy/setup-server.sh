@@ -25,6 +25,7 @@ ensure FAKE_CONTROL_TOKEN "$(secret)"
 ensure APP_BIND 127.0.0.1
 ensure APP_PORT 8121
 ensure PROVIDER_TIMEOUT 60
+ensure RATE_LIMIT_PER_MINUTE 60
 
 install -m 644 "$HERE/apache/$DOMAIN.conf" "/etc/apache2/sites-available/$DOMAIN.conf"
 a2ensite -q "$DOMAIN"

@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -36,8 +37,8 @@ def receiver() -> Receiver:
     return Receiver()
 
 
-@pytest.fixture
-async def fake(receiver: Receiver) -> AsyncIterator[tuple[httpx.AsyncClient, Any]]:
+@asynccontextmanager
+async def running_fake(receiver: Receiver, **overrides: Any) -> AsyncIterator[tuple[httpx.AsyncClient, Any]]:
     settings = FakeSettings(
         service_url="http://service.test",
         provider_secrets=SECRETS,
@@ -45,6 +46,7 @@ async def fake(receiver: Receiver) -> AsyncIterator[tuple[httpx.AsyncClient, Any
         control_token=CONTROL_TOKEN,
         default_behaviour={"delay_min": 0, "delay_max": 0},
         retry_backoff=0,
+        **overrides,
     )
     app = create_fake_app(settings, service_transport=httpx.MockTransport(receiver.handler))
     async with (
@@ -52,6 +54,12 @@ async def fake(receiver: Receiver) -> AsyncIterator[tuple[httpx.AsyncClient, Any
         httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fake.test") as client,
     ):
         yield client, app.state.world
+
+
+@pytest.fixture
+async def fake(receiver: Receiver) -> AsyncIterator[tuple[httpx.AsyncClient, Any]]:
+    async with running_fake(receiver) as running:
+        yield running
 
 
 async def submit(
@@ -121,6 +129,23 @@ async def test_dropped_webhook_never_arrives(fake: Any, receiver: Receiver) -> N
     assert (await submit(client, prompt="@alpha:drop")).status_code == 202
     await world.drain()
     assert receiver.requests == []
+
+
+class TestBoundedMemory:
+    """The demo is public: a flood of tasks (say, all with @alpha:late=3600) must not exhaust the fake's memory."""
+
+    async def test_an_overloaded_provider_answers_503_like_a_real_one(self, receiver: Receiver) -> None:
+        async with running_fake(receiver, max_in_flight=1) as (client, world):
+            assert (await submit(client, prompt="@alpha:delay=0.3", attempt_id="a-1")).status_code == 202
+            assert (await submit(client, prompt="@alpha:delay=0.3", attempt_id="a-2")).status_code == 503
+            await world.drain()
+            assert (await submit(client, attempt_id="a-3")).status_code == 202
+
+    async def test_only_recent_attempts_are_remembered_for_deduplication(self, receiver: Receiver) -> None:
+        async with running_fake(receiver, max_jobs=2) as (client, world):
+            for attempt_id in ("a-1", "a-2", "a-3"):
+                await submit(client, prompt="@alpha:drop", attempt_id=attempt_id)
+            assert list(world.jobs) == [("alpha", "a-2"), ("alpha", "a-3")]
 
 
 async def test_failed_delivery_is_retried_like_a_real_provider(fake: Any, receiver: Receiver) -> None:

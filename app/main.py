@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.api import demo, public, webhooks
+from app.cache import TtlCache
 from app.config import Settings, get_settings
 from app.db import create_pool
 from app.http_security import BodySizeLimit, SecurityHeaders
@@ -40,7 +41,13 @@ def create_app(
         dispatcher = Dispatcher(pool, gateway, settings.dispatch_lease, settings.provider_timeout)
         watchdog = Watchdog(pool)
         background = BackgroundLoop(dispatcher, watchdog, settings.poll_interval)
-        app.state.services = Services(settings, pool, http, dispatcher, watchdog, background)
+
+        async def count_balance_drift() -> int:
+            drift: int = await pool.fetchval("SELECT count(*) FROM balance_drift")
+            return drift
+
+        balance_drift = TtlCache(settings.invariants_cache_seconds, count_balance_drift)
+        app.state.services = Services(settings, pool, http, dispatcher, watchdog, background, balance_drift)
         if settings.background_jobs:
             background.start()
         try:

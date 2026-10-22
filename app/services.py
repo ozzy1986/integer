@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import asyncpg
 import httpx
 
+from app.cache import TtlCache
 from app.config import Settings
 from app.workers import BackgroundLoop, Dispatcher, Watchdog
 
@@ -17,3 +18,4 @@ class Services:
     dispatcher: Dispatcher
     watchdog: Watchdog
     background: BackgroundLoop
+    balance_drift: TtlCache[int]  # users whose balance differs from their ledger (rule 8, must be 0)

@@ -14,6 +14,7 @@ import json
 import logging
 import random
 import uuid
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal
@@ -41,6 +42,9 @@ class FakeSettings(BaseSettings):
         default_factory=dict, validation_alias=AliasChoices("FAKE_DEFAULT_BEHAVIOUR", "default_behaviour")
     )
     retry_backoff: float = Field(1.0, ge=0, validation_alias=AliasChoices("FAKE_RETRY_BACKOFF", "retry_backoff"))
+    # The demo is public: memory stays bounded however many tasks arrive (and however late they answer).
+    max_in_flight: int = Field(1000, ge=1, validation_alias=AliasChoices("FAKE_MAX_IN_FLIGHT", "max_in_flight"))
+    max_jobs: int = Field(10_000, ge=1, validation_alias=AliasChoices("FAKE_MAX_JOBS", "max_jobs"))
 
 
 class TaskIn(BaseModel):
@@ -65,8 +69,19 @@ class World:
         self.rng = rng
         default = Behaviour.model_validate(settings.default_behaviour)
         self.behaviours = {name: default for name in settings.provider_secrets}
-        self.jobs: dict[tuple[str, str], str] = {}
+        # (provider, attempt_id) -> external_id of recent jobs, oldest first: enough to deduplicate a resend,
+        # which comes within the service's dispatch lease, without growing forever.
+        self.jobs: OrderedDict[tuple[str, str], str] = OrderedDict()
         self._tasks: set[asyncio.Task[Any]] = set()
+
+    @property
+    def overloaded(self) -> bool:
+        return len(self._tasks) >= self.settings.max_in_flight
+
+    def remember(self, key: tuple[str, str], external_id: str) -> None:
+        self.jobs[key] = external_id
+        while len(self.jobs) > self.settings.max_jobs:
+            self.jobs.popitem(last=False)
 
     def spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
         task = asyncio.create_task(coro)
@@ -152,6 +167,9 @@ def create_fake_app(
         key = (provider, task.attempt_id)
         if key in world.jobs:  # idempotent by attempt_id: a resend creates no second job
             return {"external_id": world.jobs[key]}
+        if world.overloaded:  # like a real provider at capacity; the service moves on to the next leg
+            response.status_code = 503
+            return {"detail": "overloaded"}
         behaviour = apply_directives(world.behaviours[provider], task.prompt, provider)
         plan = make_plan(behaviour, world.rng)
         if plan.sync_fail == "503":
@@ -161,7 +179,7 @@ def create_fake_app(
             # Hang past the caller's timeout, then accept anyway: the caller cannot know we did.
             await asyncio.sleep(behaviour.sync_timeout_seconds)
         external_id = f"{provider}-{uuid.uuid4().hex[:16]}"
-        world.jobs[key] = external_id
+        world.remember(key, external_id)
         # The sync decision is already made; replan only the delivery part from the same behaviour.
         world.spawn(world.run_job(provider, task, external_id, behaviour.model_copy(update={"sync_fail_rate": 0.0})))
         return {"external_id": external_id}

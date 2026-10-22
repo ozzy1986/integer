@@ -18,6 +18,10 @@ x-service-env: &service-env
   DEMO_PAYMENTS_URL: http://fake-providers:9000/payments
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-0}  # off locally; the public demo sets it
+  # Through the published port every client arrives from the docker gateway (a private address). Trusting
+  # X-Forwarded-For from there gives uvicorn the real client, the right-most entry the proxy appended.
+  FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
 
 # The image is multi-stage; without an explicit target compose would build the last (test) stage.
 x-runtime-build: &runtime-build

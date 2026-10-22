@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     max_active_tasks: int = Field(3, ge=1)
     max_body_bytes: int = Field(64 * 1024, ge=1024)
     ledger_page_size: int = Field(20, ge=1, le=200)
+    # Public endpoints that write (POST /generate, /demo/topup), per client address; 0 turns it off.
+    rate_limit_per_minute: int = Field(0, ge=0)
+    # GET /health/invariants sums the whole ledger: recompute it at most this often per worker.
+    invariants_cache_seconds: float = Field(10.0, ge=0)
 
     # When set, every user-facing request must carry valid Telegram Mini App initData for that user.
     telegram_bot_token: SecretStr | None = None

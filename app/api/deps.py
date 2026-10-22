@@ -4,6 +4,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ValidationError
 
+from app import ratelimit
 from app.services import Services
 from app.signing import SIGNATURE_HEADER, verify
 from app.telegram import INIT_DATA_HEADER, InitDataError, verify_init_data
@@ -32,6 +33,26 @@ def telegram_user(request: Request, services: ServicesDep) -> int | None:
 
 
 VerifiedUser = Annotated[int | None, Depends(telegram_user)]
+
+
+async def rate_limited(request: Request, services: ServicesDep) -> None:
+    """Throttle a client of the public endpoints that write. Behind a proxy the address is the one it
+    forwarded (uvicorn trusts X-Forwarded-For only from FORWARDED_ALLOW_IPS)."""
+    limit = services.settings.rate_limit_per_minute
+    if not limit:
+        return
+    client = request.client.host if request.client else "unknown"
+    async with services.pool.acquire() as conn:
+        window = await ratelimit.hit(conn, client)
+    if window.hits > limit:
+        raise HTTPException(
+            429,
+            f"too many requests: at most {limit} per minute from one client",
+            headers={"Retry-After": str(window.retry_after)},
+        )
+
+
+RateLimited = Depends(rate_limited)
 
 
 def authorize(verified: int | None, user_id: int) -> None:
