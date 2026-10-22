@@ -86,3 +86,8 @@ async def test_security_headers_are_set(harness: Harness) -> None:
     assert headers["x-content-type-options"] == "nosniff"
     assert headers["x-frame-options"] == "DENY"
     assert "default-src 'self'" in headers["content-security-policy"]
+
+
+async def test_demo_endpoints_are_off_by_default(harness: Harness) -> None:
+    response = await harness.client.post("/demo/topup", json={"user_id": 1, "tokens": 5})
+    assert response.status_code in (404, 405)

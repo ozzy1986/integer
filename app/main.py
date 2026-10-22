@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 
-from app.api import public, webhooks
+from app.api import demo, public, webhooks
 from app.config import Settings, get_settings
 from app.db import create_pool
 from app.http_security import BodySizeLimit, SecurityHeaders
@@ -30,8 +30,8 @@ def create_app(
             timeout=httpx.Timeout(settings.send_timeout),
             follow_redirects=False,
         )
-        dispatcher = Dispatcher(pool, ProviderGateway(http, settings.provider_urls), settings.dispatch_lease,
-                                settings.provider_timeout)  # fmt: skip
+        gateway = ProviderGateway(http, settings.provider_urls, settings.send_timeout)
+        dispatcher = Dispatcher(pool, gateway, settings.dispatch_lease, settings.provider_timeout)
         watchdog = Watchdog(pool)
         background = BackgroundLoop(dispatcher, watchdog, settings.poll_interval)
         app.state.services = Services(settings, pool, http, dispatcher, watchdog, background)
@@ -55,4 +55,6 @@ def create_app(
     app.add_middleware(SecurityHeaders)
     app.include_router(public.router)
     app.include_router(webhooks.router)
+    if settings.demo_payments_url:
+        app.include_router(demo.router)
     return app

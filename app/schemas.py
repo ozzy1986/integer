@@ -148,4 +148,9 @@ class HealthOut(BaseModel):
 class TopUpIn(StrictModel):
     user_id: UserId
     tokens: int = Field(gt=0)
-    copies: int = Field(1, ge=1, le=20)
+    copies: int = Field(1, ge=1, le=20, description="identical webhooks the payment provider sends at once")
+
+
+class TopUpOut(BaseModel):
+    payment_id: str
+    delivered: list[int]

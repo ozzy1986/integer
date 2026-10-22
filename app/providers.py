@@ -3,6 +3,7 @@
 Maps every way a submission can go wrong to a ProviderError (rule 3), so the engine stays HTTP-agnostic.
 """
 
+import asyncio
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -27,9 +28,11 @@ class SubmitFailed(Exception):
 
 
 class ProviderGateway:
-    def __init__(self, client: httpx.AsyncClient, base_urls: dict[str, str]) -> None:
+    def __init__(self, client: httpx.AsyncClient, base_urls: dict[str, str], deadline: float) -> None:
         self._client = client
         self._base_urls = {name: url.rstrip("/") for name, url in base_urls.items()}
+        # httpx timeouts limit each network operation; this caps the whole call (a slow drip included).
+        self._deadline = deadline
 
     async def submit(self, submission: Submission) -> str:
         """Return the provider's external_id or raise SubmitFailed."""
@@ -44,8 +47,9 @@ class ProviderGateway:
             "ref_images": submission.ref_images,
         }
         try:
-            response = await self._client.post(f"{base_url}/tasks", json=payload)
-        except httpx.TimeoutException as exc:
+            async with asyncio.timeout(self._deadline):
+                response = await self._client.post(f"{base_url}/tasks", json=payload)
+        except (TimeoutError, httpx.TimeoutException) as exc:
             raise SubmitFailed(ProviderError.TECHNICAL, "send_timeout") from exc
         except httpx.TransportError as exc:
             raise SubmitFailed(ProviderError.TECHNICAL, "connect_error") from exc
