@@ -55,9 +55,7 @@ async def test_ledger_row_moves_balance_and_records_balance_after(pool: asyncpg.
         await credit(conn, user_id, 10)
         await credit(conn, user_id, 5)
         assert await balance(conn, user_id) == 15
-        rows = await conn.fetch(
-            "SELECT amount, balance_after FROM ledger WHERE user_id = $1 ORDER BY id", user_id
-        )
+        rows = await conn.fetch("SELECT amount, balance_after FROM ledger WHERE user_id = $1 ORDER BY id", user_id)
         assert [(r["amount"], r["balance_after"]) for r in rows] == [(10, 10), (5, 15)]
 
 
@@ -104,9 +102,7 @@ async def test_payment_is_credited_at_most_once(pool: asyncpg.Pool) -> None:
         with pytest.raises(asyncpg.UniqueViolationError):
             await conn.execute(insert, user_id, payment_id)
         # ON CONFLICT DO NOTHING must not move the balance either (balance moves in an AFTER trigger).
-        await conn.execute(
-            insert + " ON CONFLICT (payment_id) WHERE kind = 'payment' DO NOTHING", user_id, payment_id
-        )
+        await conn.execute(insert + " ON CONFLICT (payment_id) WHERE kind = 'payment' DO NOTHING", user_id, payment_id)
         assert await balance(conn, user_id) == 7
 
 
@@ -145,9 +141,7 @@ async def test_ledger_row_must_reference_what_it_is_for(pool: asyncpg.Pool) -> N
     async with pool.acquire() as conn:
         user_id = await make_user(conn)
         with pytest.raises(asyncpg.CheckViolationError):
-            await conn.execute(
-                "INSERT INTO ledger (user_id, kind, amount) VALUES ($1, 'payment', 5)", user_id
-            )
+            await conn.execute("INSERT INTO ledger (user_id, kind, amount) VALUES ($1, 'payment', 5)", user_id)
         with pytest.raises(asyncpg.CheckViolationError):
             await conn.execute(
                 "INSERT INTO ledger (user_id, kind, amount, payment_id) VALUES ($1, 'payment', -5, 'x')",

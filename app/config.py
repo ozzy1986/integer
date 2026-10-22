@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     poll_interval: float = Field(0.5, gt=0, description="Background loop period (dispatcher + watchdog)")
     background_jobs: bool = True
 
+    log_level: str = Field("INFO", pattern="^(DEBUG|INFO|WARNING|ERROR)$")
     max_active_tasks: int = Field(3, ge=1)
     max_body_bytes: int = Field(64 * 1024, ge=1024)
     ledger_page_size: int = Field(20, ge=1, le=200)
@@ -52,8 +53,11 @@ class Settings(BaseSettings):
         missing = set(self.provider_urls) - set(self.provider_secrets)
         if missing:
             raise ValueError(f"providers without a webhook secret: {sorted(missing)}")
+        if self.dispatch_lease <= self.send_timeout:
+            # Otherwise a slow but alive sender could see its attempt re-claimed by another worker.
+            raise ValueError("DISPATCH_LEASE must be longer than SEND_TIMEOUT")
 
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]  # values come from the environment
+    return Settings()  # values come from the environment

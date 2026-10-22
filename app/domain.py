@@ -39,9 +39,7 @@ class Leg:
         return ref_count <= self.max_ref_images
 
 
-def next_leg(
-    legs: Iterable[Leg], ref_count: int, after_priority: int, last_error: ProviderError | None
-) -> Leg | None:
+def next_leg(legs: Iterable[Leg], ref_count: int, after_priority: int, last_error: ProviderError | None) -> Leg | None:
     """The leg to try after `after_priority` failed with `last_error` (rules 1-2)."""
     if last_error is ProviderError.PAYLOAD:
         return None  # a malformed request is rejected by any leg
