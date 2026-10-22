@@ -8,7 +8,7 @@ import asyncpg
 import httpx
 import pytest
 
-from app import engine
+from app import billing, engine
 from tests.integration.conftest import Harness, raises, status
 
 
@@ -87,6 +87,42 @@ async def test_alpha_is_skipped_when_it_cannot_take_the_references(harness: Harn
     user_id = await harness.new_user(tokens=10)
     await harness.start_task(user_id, refs=5)
     assert harness.stub.providers_called() == ["beta"]
+
+
+class TestCrashMidWebhook:
+    """README: a webhook is one transaction. A process that dies before COMMIT leaves nothing half-done, the
+    provider gets no 200 and retries, and the retry is processed as if it were the first delivery."""
+
+    async def test_a_dead_connection_before_commit_leaves_no_trace_and_the_retry_refunds_once(
+        self, harness: Harness, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        user_id = await harness.new_user(tokens=10)
+        task_id = await harness.start_task(user_id)
+        await harness.fail("alpha", (await harness.live_attempt(task_id))["id"])
+        await harness.dispatch()
+        beta = await harness.live_attempt(task_id)
+        real_refund = billing.refund
+
+        async def die(conn: Any, *args: Any) -> bool:
+            # The last step of the transaction: the attempt and the task are already marked failed in it.
+            conn.terminate()  # the server sees the client vanish before COMMIT, as with a killed process
+            raise ConnectionResetError("the worker died")
+
+        monkeypatch.setattr(billing, "refund", die)
+        with pytest.raises(asyncpg.InterfaceError):  # what is left of the transaction cannot even roll back
+            await harness.fail("beta", beta["id"])
+
+        task = await harness.task(task_id)
+        assert task["status"] == "in_progress"
+        assert (await harness.live_attempt(task_id))["id"] == beta["id"]
+        assert await harness.ledger_kinds(user_id) == ["payment", "charge"]
+
+        monkeypatch.setattr(billing, "refund", real_refund)
+        retry = await harness.fail("beta", beta["id"])
+
+        assert retry.json()["outcome"] == "task_failed"
+        assert await harness.ledger_kinds(user_id) == ["payment", "charge", "refund"]
+        assert (await harness.balance(user_id))["balance"] == 10
 
 
 class TestSynchronousErrors:
