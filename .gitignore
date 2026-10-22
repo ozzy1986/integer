@@ -1,0 +1,23 @@
+# secrets / local
+.env
+.env.*
+!.env.example
+
+# deps / build
+node_modules/
+vendor/
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+dist/
+
+# misc
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+*.pem
+*.key
