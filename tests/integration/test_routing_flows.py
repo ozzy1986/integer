@@ -1,10 +1,12 @@
 """Rules 2-5 end to end through the engine: moderation, payload, sync errors, watchdog, races."""
 
 import asyncio
+from typing import Any
 
 import httpx
 import pytest
 
+from app import engine
 from tests.integration.conftest import Harness, raises, status
 
 
@@ -207,6 +209,31 @@ class TestDispatcher:
             await conn.execute(
                 "UPDATE attempts SET lease_until = now() - interval '1 second' WHERE task_id = $1::uuid",
                 task_id,
+            )
+        assert await harness.dispatch() == 1
+        assert (await harness.live_attempt(task_id))["status"] == "sent"
+
+    async def test_failed_bookkeeping_of_one_send_is_retried_after_the_lease(
+        self, harness: Harness, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The provider took the job, but recording it failed (say, the database blipped): the dispatcher
+        # must survive it, and the lease brings the attempt back; the provider deduplicates the resend.
+        user_id = await harness.new_user(tokens=10)
+        task_id = (await harness.generate(user_id)).json()["task_id"]
+        real_mark_sent = engine.mark_sent
+
+        async def broken_once(*args: Any, **kwargs: Any) -> engine.Outcome:
+            monkeypatch.setattr(engine, "mark_sent", real_mark_sent)
+            raise ConnectionResetError("database went away")
+
+        monkeypatch.setattr(engine, "mark_sent", broken_once)
+
+        await harness.dispatch()  # must not blow up the loop
+
+        assert (await harness.live_attempt(task_id))["status"] == "pending"
+        async with harness.services.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE attempts SET lease_until = now() - interval '1 second' WHERE task_id = $1::uuid", task_id
             )
         assert await harness.dispatch() == 1
         assert (await harness.live_attempt(task_id))["status"] == "sent"
