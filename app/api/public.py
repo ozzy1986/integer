@@ -5,7 +5,7 @@ from typing import Annotated
 from uuid import UUID
 
 import asyncpg
-from fastapi import APIRouter, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Header, HTTPException, Path, Query, Response
 
 from app import catalog, engine
 from app.api.deps import ServicesDep, VerifiedUser, authorize
@@ -27,6 +27,9 @@ from app.schemas import (
 )
 
 router = APIRouter()
+
+# The same bounds as in request bodies: anything else could never be a user (and would not fit a bigint).
+UserIdInPath = Annotated[int, Path(gt=0, lt=2**63)]
 
 _TASK_SUMMARY = """
     SELECT id, user_id, model_slug AS model, status, price, result_url, error, created_at, finished_at
@@ -119,7 +122,7 @@ def _current_leg(attempts: list[asyncpg.Record]) -> CurrentLeg | None:
 
 @router.get("/users/{user_id}/balance")
 async def get_balance(
-    user_id: int,
+    user_id: UserIdInPath,
     services: ServicesDep,
     verified: VerifiedUser,
     limit: Annotated[int | None, Query(ge=1, le=200)] = None,
@@ -138,7 +141,7 @@ async def get_balance(
 
 @router.get("/users/{user_id}/tasks")
 async def list_user_tasks(
-    user_id: int,
+    user_id: UserIdInPath,
     services: ServicesDep,
     verified: VerifiedUser,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,

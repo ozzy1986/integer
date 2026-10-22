@@ -59,6 +59,12 @@ async def test_balance_ledger_limit(harness: Harness, limit: int, expected: int 
         assert len(response.json()["ledger"]) == expected
 
 
+@pytest.mark.parametrize("user_id", ["0", "-5", str(2**63), "99999999999999999999"])
+@pytest.mark.parametrize("what", ["balance", "tasks"])
+async def test_impossible_user_ids_in_the_path_are_422(harness: Harness, user_id: str, what: str) -> None:
+    assert (await harness.client.get(f"/users/{user_id}/{what}")).status_code == 422
+
+
 async def test_user_task_list_newest_first(harness: Harness) -> None:
     user_id = await harness.new_user(tokens=10)
     first = (await harness.generate(user_id)).json()["task_id"]

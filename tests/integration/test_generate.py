@@ -99,10 +99,12 @@ async def test_concurrent_requests_never_overdraw_the_balance(harness: Harness) 
     [
         {"prompt": ""},
         {"prompt": "x" * 4001},
+        {"prompt": "a\x00b"},  # PostgreSQL text cannot hold NUL: must be 422, not a 500 from the database
         {"model_slug": "Bad Slug!"},
         {"user_id": 0},
         {"user_id": -5},
         {"user_id": 2**63},
+        {"user_id": True},  # would otherwise be taken as user 1
         {"ref_images": ["not a url"]},
         {"ref_images": ["javascript:alert(1)"]},
         {"ref_images": ["https://x.example/" + "a" * 2100]},

@@ -140,6 +140,18 @@ class TestSynchronousErrors:
         task_id = await harness.start_task(user_id)
         assert (await harness.task(task_id))["attempts"][0]["reason"] == "bad_response"
 
+    async def test_202_with_an_unprintable_external_id_is_a_technical_failure(self, harness: Harness) -> None:
+        # A NUL could not even be stored: the attempt would stay pending and be resent forever.
+        harness.stub.script("alpha", lambda request: httpx.Response(202, json={"external_id": "x\x00y"}))
+        user_id = await harness.new_user(tokens=10)
+        task_id = await harness.start_task(user_id)
+        await harness.dispatch()
+        attempts = (await harness.task(task_id))["attempts"]
+        assert [(a["provider"], a["status"], a["reason"]) for a in attempts] == [
+            ("alpha", "failed", "bad_response"),
+            ("beta", "sent", None),
+        ]
+
 
 class TestWatchdog:
     async def test_silent_provider_is_treated_as_a_technical_failure(self, harness: Harness) -> None:

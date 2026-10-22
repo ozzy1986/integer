@@ -67,6 +67,11 @@ class ProviderGateway:
             external_id = response.json()["external_id"]
         except (ValueError, KeyError, TypeError) as exc:
             raise SubmitFailed(ProviderError.TECHNICAL, "bad_response") from exc
-        if response.status_code not in (200, 201, 202) or not isinstance(external_id, str) or not external_id:
+        if (
+            response.status_code not in (200, 201, 202)
+            or not isinstance(external_id, str)
+            or not external_id
+            or not external_id.isprintable()  # a NUL could not even be stored
+        ):
             raise SubmitFailed(ProviderError.TECHNICAL, "bad_response")
         return external_id[:128]

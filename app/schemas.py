@@ -4,12 +4,36 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, UrlConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    AnyHttpUrl,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    UrlConstraints,
+    model_validator,
+)
 
 from app.billing import PaymentStatus
 from app.domain import AttemptStatus, ProviderError, TaskStatus
 
-UserId = Annotated[int, Field(gt=0, lt=2**63)]
+
+def _not_bool(value: object) -> object:
+    # Lax mode would turn JSON true/false into user 1/0.
+    if isinstance(value, bool):
+        raise ValueError("must be an integer, not a boolean")
+    return value
+
+
+def _no_nul(value: str) -> str:
+    # PostgreSQL text cannot hold NUL: reject it as 422 here instead of failing in the database with a 500.
+    if "\x00" in value:
+        raise ValueError("must not contain NUL characters")
+    return value
+
+
+UserId = Annotated[int, BeforeValidator(_not_bool), Field(gt=0, lt=2**63)]
 Slug = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")]
 HttpUrl = Annotated[AnyHttpUrl, UrlConstraints(max_length=2048, allowed_schemes=["http", "https"])]
 IdempotencyKey = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")]
@@ -22,7 +46,7 @@ class StrictModel(BaseModel):
 class GenerateIn(StrictModel):
     user_id: UserId
     model_slug: Slug
-    prompt: str = Field(min_length=1, max_length=4000)
+    prompt: Annotated[str, Field(min_length=1, max_length=4000), AfterValidator(_no_nul)]
     ref_images: list[HttpUrl] = Field(default_factory=list, max_length=32)
 
 
