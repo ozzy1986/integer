@@ -55,7 +55,8 @@ def _payment_status(value: object) -> object:
     return value
 
 
-UserId = Annotated[int, BeforeValidator(_not_bool), Field(gt=0, lt=2**63)]
+# Constraints before the validator: so they stay native, and the JSON schema says exclusiveMinimum, not "gt".
+UserId = Annotated[int, Field(gt=0, lt=2**63), BeforeValidator(_not_bool)]
 Slug = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")]
 IdempotencyKey = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")]
 # A reference image or a provider's result: the task fixes no format (a URL of any scheme, a file name, an

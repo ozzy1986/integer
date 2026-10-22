@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -69,3 +69,32 @@ async def signed_payload[M: BaseModel](request: Request, secret: str, model: typ
         return model.model_validate_json(body)
     except ValidationError as exc:
         raise RequestValidationError(exc.errors(include_url=False, include_context=False)) from exc
+
+
+def signed_body_openapi(model: type[BaseModel]) -> dict[str, Any]:
+    """OpenAPI for a route that takes `signed_payload`. The body is read raw, so FastAPI cannot see it from the
+    signature: describe the body and the signature header here, the body schema self-contained."""
+    schema = model.model_json_schema()
+    definitions = schema.pop("$defs", {})
+
+    def inline(node: Any) -> Any:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                return inline(definitions[node["$ref"].rsplit("/", 1)[-1]])
+            return {key: inline(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [inline(item) for item in node]
+        return node
+
+    return {
+        "parameters": [
+            {
+                "name": SIGNATURE_HEADER,
+                "in": "header",
+                "required": True,
+                "description": "hex HMAC-SHA256 of the raw request body with the sender's secret",
+                "schema": {"type": "string"},
+            }
+        ],
+        "requestBody": {"required": True, "content": {"application/json": {"schema": inline(schema)}}},
+    }

@@ -1,7 +1,7 @@
 """User-facing API: create a task, read tasks, balance and the catalog."""
 
 from dataclasses import asdict
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 import asyncpg
@@ -31,6 +31,12 @@ router = APIRouter()
 # The same bounds as in request bodies: anything else could never be a user (and would not fit a bigint).
 UserIdInPath = Annotated[int, Path(gt=0, lt=2**63)]
 
+# Only with TELEGRAM_BOT_TOKEN set: then the caller is the user proven by X-Telegram-Init-Data.
+_TELEGRAM: dict[int | str, dict[str, Any]] = {
+    401: {"description": "Telegram mode: X-Telegram-Init-Data is missing or invalid"},
+    403: {"description": "Telegram mode: this is another user's data"},
+}
+
 _TASK_SUMMARY = """
     SELECT id, user_id, model_slug AS model, status, price, result_url, error, created_at, finished_at
       FROM tasks WHERE user_id = $1 ORDER BY created_at DESC, id LIMIT $2
@@ -47,11 +53,13 @@ _TASK = """
     status_code=202,
     dependencies=[RateLimited],
     responses={
+        **_TELEGRAM,
         200: {"description": "Idempotency-Key replay: the task created by the first request"},
         400: {"description": "No leg accepts that many reference images"},
         402: {"description": "Not enough tokens"},
         404: {"description": "Unknown model"},
         409: {"description": "Idempotency-Key reused for a different request"},
+        413: {"description": "Body over the size limit"},
         429: {"description": "The user already has the maximum number of active tasks (or RATE_LIMIT_PER_MINUTE)"},
     },
 )
@@ -83,7 +91,13 @@ async def generate(
     return GenerateOut(task_id=created.task_id, status=TaskStatus.IN_PROGRESS)
 
 
-@router.get("/tasks/{task_id}")
+@router.get(
+    "/tasks/{task_id}",
+    responses={
+        401: _TELEGRAM[401],
+        404: {"description": "No such task (in Telegram mode, also another user's task)"},
+    },
+)
 async def get_task(task_id: UUID, services: ServicesDep, verified: VerifiedUser) -> TaskOut:
     async with services.pool.acquire() as conn, conn.transaction(isolation="repeatable_read", readonly=True):
         task = await conn.fetchrow(_TASK, task_id)
@@ -121,7 +135,7 @@ def _current_leg(attempts: list[asyncpg.Record]) -> CurrentLeg | None:
     )
 
 
-@router.get("/users/{user_id}/balance")
+@router.get("/users/{user_id}/balance", responses=_TELEGRAM)
 async def get_balance(
     user_id: UserIdInPath,
     services: ServicesDep,
@@ -140,7 +154,7 @@ async def get_balance(
     return BalanceOut(user_id=user_id, balance=balance or 0, ledger=[LedgerRow(**dict(r)) for r in rows])
 
 
-@router.get("/users/{user_id}/tasks")
+@router.get("/users/{user_id}/tasks", responses=_TELEGRAM)
 async def list_user_tasks(
     user_id: UserIdInPath,
     services: ServicesDep,

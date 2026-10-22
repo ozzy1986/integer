@@ -1,6 +1,8 @@
 """Read endpoints: task history, balance with ledger, catalog, health."""
 
+import json
 import uuid
+from collections.abc import Iterator
 
 import pytest
 
@@ -86,6 +88,36 @@ async def test_models_catalog(harness: Harness) -> None:
 async def test_health_reports_database_and_invariants(harness: Harness) -> None:
     assert (await harness.client.get("/health")).json() == {"status": "ok"}
     assert (await harness.client.get("/health/invariants")).json() == {"balance_drift": 0}
+
+
+async def test_webhooks_are_documented_with_their_body_and_signature(harness: Harness) -> None:
+    # The body is read raw for the signature check, so FastAPI cannot infer it: it is described by hand.
+    spec = (await harness.client.get("/openapi.json")).json()
+    expected = {
+        "/webhooks/payments": {"payment_id", "user_id", "tokens", "status"},
+        "/webhooks/providers/{name}": {"attempt_id", "external_id", "status", "result_url", "error_type"},
+    }
+    for path, fields in expected.items():
+        operation = spec["paths"][path]["post"]
+        assert set(operation["requestBody"]["content"]["application/json"]["schema"]["properties"]) == fields
+        assert "X-Signature" in [p["name"] for p in operation["parameters"] if p["in"] == "header"]
+        assert {"200", "401", "422"} <= set(operation["responses"])
+    assert "#/$defs/" not in json.dumps(spec)  # every reference resolves inside the document
+    assert not {"gt", "ge", "lt", "le"} & set(_keywords(spec))  # JSON Schema says exclusiveMinimum etc.
+    assert "404" in spec["paths"]["/tasks/{task_id}"]["get"]["responses"]
+
+
+def _keywords(node: object) -> Iterator[str]:
+    """Every key in the document except property names, which are data rather than keywords."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield key
+            children = value.values() if key == "properties" and isinstance(value, dict) else [value]
+            for child in children:
+                yield from _keywords(child)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _keywords(item)
 
 
 async def test_security_headers_are_set(harness: Harness) -> None:
