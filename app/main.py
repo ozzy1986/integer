@@ -9,6 +9,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from app.access_log import hide_local_health_checks
 from app.api import demo, public, webhooks
 from app.cache import TtlCache
 from app.config import Settings, get_settings
@@ -26,6 +27,7 @@ def create_app(
 ) -> FastAPI:
     settings = settings or get_settings()
     logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    hide_local_health_checks()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

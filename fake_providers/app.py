@@ -24,6 +24,7 @@ from fastapi import FastAPI, Header, HTTPException, Response
 from pydantic import AliasChoices, BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.access_log import hide_local_health_checks
 from app.signing import SIGNATURE_HEADER, sign
 from fake_providers.behaviour import Behaviour, apply_directives, make_plan
 
@@ -145,6 +146,7 @@ def create_fake_app(
 ) -> FastAPI:
     settings = settings or FakeSettings()  # values come from the environment
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    hide_local_health_checks()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
