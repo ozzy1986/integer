@@ -87,7 +87,7 @@ async def get_task(task_id: UUID, services: ServicesDep, verified: VerifiedUser)
             raise HTTPException(404, "task not found")
         attempts = await conn.fetch(
             """SELECT id, number, provider, leg_priority, status, error, reason, external_id, result_url,
-                      created_at, sent_at, finished_at
+                      created_at, sent_at, deadline_at, finished_at
                  FROM attempts WHERE task_id = $1 ORDER BY number""",
             task_id,
         )

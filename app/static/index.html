@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Integer · сервис генерации</title>
+  <meta name="description" content="Демо сервиса генерации: списание токенов, цепочка провайдеров, возврат ровно один раз.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/fonts/onest-cyrillic-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/css/app.css">
+  <script type="module" src="/js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">∫</span>
+      <div>
+        <div class="brand-name">integer</div>
+        <div class="brand-sub">сервис генерации · демо</div>
+      </div>
+    </div>
+    <nav class="topnav">
+      <span class="pill pill-muted" id="invariant" title="Проверка на сервере: у каждого пользователя баланс равен сумме его журнала">инвариант…</span>
+      <a class="link" href="/docs" target="_blank" rel="noopener">API</a>
+      <a class="link" href="https://github.com/ozzy1986/integer" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <button class="icon-btn" id="theme" type="button" aria-label="Сменить тему">◐</button>
+    </nav>
+  </header>
+
+  <main class="layout">
+    <section class="card user-card" aria-labelledby="user-title">
+      <h2 id="user-title" class="card-title">Пользователь</h2>
+      <p class="hint">Регистрации нет — как в Telegram, пользователь это просто его ID.</p>
+      <div class="field-row">
+        <label class="field grow">
+          <span class="field-label">Telegram ID</span>
+          <input id="user-id" class="input mono" inputmode="numeric" autocomplete="off" spellcheck="false">
+        </label>
+        <button class="btn btn-ghost" id="user-random" type="button" title="Новый пользователь">↻</button>
+      </div>
+
+      <div class="balance">
+        <div class="balance-label">Баланс</div>
+        <div class="balance-value"><span id="balance">—</span> <span class="balance-unit">токенов</span></div>
+      </div>
+
+      <form id="topup" class="topup">
+        <div class="field-row">
+          <label class="field grow">
+            <span class="field-label">Пополнить на</span>
+            <input id="topup-amount" class="input mono" type="number" min="1" max="1000" value="50" required>
+          </label>
+          <label class="field">
+            <span class="field-label">Копий вебхука</span>
+            <select id="topup-copies" class="input">
+              <option value="1">1</option>
+              <option value="5">5 одновременно</option>
+              <option value="20" selected>20 одновременно</option>
+            </select>
+          </label>
+        </div>
+        <button class="btn btn-primary wide" type="submit">Оплатить</button>
+        <p class="hint">Деньги приходят настоящим подписанным вебхуком от фейкового платёжного провайдера. Сколько бы копий ни пришло — начисление одно.</p>
+      </form>
+
+      <h3 class="section-title">Журнал операций</h3>
+      <div class="ledger" id="ledger"><p class="empty">Операций пока нет</p></div>
+    </section>
+
+    <section class="card generate-card" aria-labelledby="gen-title">
+      <h2 id="gen-title" class="card-title">Новая генерация</h2>
+
+      <div class="scenarios" id="scenarios" role="group" aria-label="Готовые сценарии"></div>
+
+      <form id="generate" class="generate">
+        <div class="field">
+          <span class="field-label">Модель</span>
+          <div class="models" id="models" role="radiogroup"></div>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Промпт</span>
+          <textarea id="prompt" class="input" rows="3" maxlength="3500" required>Кот в шляпе, акварель</textarea>
+        </label>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Референсов</span>
+            <input id="refs" class="input mono" type="number" min="0" max="12" value="0">
+          </label>
+          <label class="field grow toggle">
+            <input id="fast" type="checkbox" checked>
+            <span>Быстрые провайдеры: ответ через ~1 с вместо 2–20 с</span>
+          </label>
+        </div>
+
+        <div class="providers" id="providers"></div>
+
+        <div class="directive-preview">
+          <span class="field-label">Уйдёт провайдеру</span>
+          <code id="final-prompt" class="mono"></code>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" type="submit" id="submit">Сгенерировать</button>
+          <button class="btn btn-ghost" type="button" id="repeat" disabled title="Тот же запрос с тем же Idempotency-Key">Повторить запрос</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card tasks-card" aria-labelledby="tasks-title">
+      <div class="card-head">
+        <h2 id="tasks-title" class="card-title">Задачи</h2>
+        <span class="hint" id="tasks-hint">обновляется само</span>
+      </div>
+      <div id="tasks" class="tasks"><p class="empty">Задач пока нет — запустите генерацию</p></div>
+    </section>
+  </main>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</body>
+</html>

@@ -17,9 +17,10 @@ async def test_task_history_lists_attempts_and_events_in_order(harness: Harness)
 
     assert [a["number"] for a in task["attempts"]] == [1, 2]
     assert task["current_leg"] == {"attempt": 2, "priority": 2, "provider": "beta", "status": "sent"}
-    first = task["attempts"][0]
+    first, second = task["attempts"]
     assert (first["provider"], first["error"], first["reason"]) == ("alpha", "moderation", "webhook")
     assert first["created_at"] <= first["sent_at"] <= first["finished_at"]
+    assert second["sent_at"] < second["deadline_at"]  # the watchdog's clock, shown in the UI
     kinds = [event["kind"] for event in task["events"]]
     assert kinds == [
         "created",
@@ -91,3 +92,38 @@ async def test_security_headers_are_set(harness: Harness) -> None:
 async def test_demo_endpoints_are_off_by_default(harness: Harness) -> None:
     response = await harness.client.post("/demo/topup", json={"user_id": 1, "tokens": 5})
     assert response.status_code in (404, 405)
+
+
+class TestWebUi:
+    async def test_index_page_is_served_with_a_strict_csp(self, harness: Harness) -> None:
+        response = await harness.client.get("/")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert "<title>Integer" in response.text
+        csp = response.headers["content-security-policy"]
+        assert "script-src 'self';" in csp
+        assert "unsafe-inline" not in csp
+
+    @pytest.mark.parametrize(
+        "path", ["/js/app.js", "/js/api.js", "/css/app.css", "/fonts/onest-cyrillic-wght-normal.woff2", "/favicon.svg"]
+    )
+    async def test_assets_are_served(self, harness: Harness, path: str) -> None:
+        assert (await harness.client.get(path)).status_code == 200
+
+    async def test_api_routes_are_not_shadowed(self, harness: Harness) -> None:
+        assert (await harness.client.get("/docs")).status_code == 200
+        assert (await harness.client.get("/models")).headers["content-type"] == "application/json"
+        assert (await harness.client.get("/no-such-page")).status_code == 404
+
+    async def test_ui_never_uses_inner_html(self) -> None:
+        from app.main import STATIC_DIR
+
+        for script in (STATIC_DIR / "js").glob("*.js"):
+            source = script.read_text(encoding="utf-8")
+            assert "innerHTML" not in source, script.name
+            assert "insertAdjacentHTML" not in source, script.name
+
+
+async def test_provider_client_ignores_proxy_environment(harness: Harness) -> None:
+    # Signed webhooks and provider calls must never be routed through an HTTP(S)_PROXY from the environment.
+    assert harness.services.http.trust_env is False

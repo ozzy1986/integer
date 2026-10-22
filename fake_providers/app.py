@@ -132,7 +132,7 @@ def create_fake_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        async with httpx.AsyncClient(transport=service_transport, timeout=10.0) as http:
+        async with httpx.AsyncClient(transport=service_transport, timeout=10.0, trust_env=False) as http:
             world = World(settings, http, rng or random.Random())  # noqa: S311 - not cryptographic
             app.state.world = world
             yield

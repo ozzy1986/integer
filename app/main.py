@@ -3,9 +3,11 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api import demo, public, webhooks
 from app.config import Settings, get_settings
@@ -14,6 +16,8 @@ from app.http_security import BodySizeLimit, SecurityHeaders
 from app.providers import ProviderGateway
 from app.services import Services
 from app.workers import BackgroundLoop, Dispatcher, Watchdog
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 def create_app(
@@ -29,6 +33,8 @@ def create_app(
             transport=provider_transport,
             timeout=httpx.Timeout(settings.send_timeout),
             follow_redirects=False,
+            # Provider calls go to configured URLs only: never through a proxy picked up from the environment.
+            trust_env=False,
         )
         gateway = ProviderGateway(http, settings.provider_urls, settings.send_timeout)
         dispatcher = Dispatcher(pool, gateway, settings.dispatch_lease, settings.provider_timeout)
@@ -57,4 +63,6 @@ def create_app(
     app.include_router(webhooks.router)
     if settings.demo_payments_url:
         app.include_router(demo.router)
+    # The demo UI. Mounted last so it never shadows an API route.
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
     return app

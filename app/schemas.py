@@ -91,6 +91,7 @@ class AttemptOut(BaseModel):
     result_url: str | None
     created_at: datetime
     sent_at: datetime | None
+    deadline_at: datetime | None = Field(description="when the watchdog gives up on this attempt")
     finished_at: datetime | None
 
 
