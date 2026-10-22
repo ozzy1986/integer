@@ -38,6 +38,10 @@ class Dispatcher:
         self._lease_seconds = lease_seconds
         self._provider_timeout = provider_timeout
         self._in_flight: set[asyncio.Task[None]] = set()
+        self.wakeup = asyncio.Event()  # set when this process committed something to send
+
+    def wake(self) -> None:
+        self.wakeup.set()
 
     async def run_once(self) -> int:
         """Claim a batch and send it; returns once every send is recorded (tests drive this directly)."""
@@ -83,7 +87,9 @@ class Dispatcher:
             except SubmitFailed as failure:
                 log.warning("attempt %s to %s failed to send: %s", submission.attempt_id, submission.provider, failure)
                 async with self._pool.acquire() as conn:
-                    await engine.fail_attempt(conn, submission.attempt_id, failure.error, failure.reason)
+                    outcome = await engine.fail_attempt(conn, submission.attempt_id, failure.error, failure.reason)
+                if outcome is engine.Outcome.NEXT_ATTEMPT:
+                    self.wake()  # the next leg goes now, not on the next tick
                 return
             async with self._pool.acquire() as conn:
                 await engine.mark_sent(conn, submission.attempt_id, external_id, self._provider_timeout)
@@ -112,24 +118,31 @@ class Watchdog:
 
 class BackgroundLoop:
     """Runs the dispatcher and the watchdog as two independent loops, each every `interval` seconds; the
-    dispatcher sooner when woken up. Independent, so a slow send can never delay the watchdog."""
+    dispatcher sooner when woken up. Independent, so a slow send can never delay the watchdog.
+
+    Every way to a next attempt wakes the dispatcher: a failed webhook, a failed send, the watchdog."""
 
     def __init__(self, dispatcher: Dispatcher, watchdog: Watchdog, interval: float) -> None:
         self._dispatcher = dispatcher
         self._watchdog = watchdog
         self._interval = interval
-        self._wakeup = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
 
     def wake(self) -> None:
         """New work was committed in this process: dispatch it now instead of on the next tick."""
-        self._wakeup.set()
+        self._dispatcher.wake()
 
     def start(self) -> None:
         self._tasks = [
-            asyncio.create_task(self._repeat("dispatcher", self._dispatcher.start_sending, self._wakeup)),
-            asyncio.create_task(self._repeat("watchdog", self._watchdog.run_once, asyncio.Event())),
+            asyncio.create_task(self._repeat("dispatcher", self._dispatcher.start_sending, self._dispatcher.wakeup)),
+            asyncio.create_task(self._repeat("watchdog", self._expire_overdue, asyncio.Event())),
         ]
+
+    async def _expire_overdue(self) -> int:
+        expired = await self._watchdog.run_once()
+        if expired:
+            self._dispatcher.wake()  # their next legs are pending now
+        return expired
 
     async def stop(self) -> None:
         for task in self._tasks:

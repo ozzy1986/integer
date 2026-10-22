@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
-from tests.integration.conftest import Harness, accepted
+from tests.integration.conftest import Harness, accepted, status
 
 
 @pytest.fixture
@@ -47,6 +47,38 @@ async def test_a_hanging_provider_holds_up_neither_other_sends_nor_the_watchdog(
     finally:
         release.set()
         await background.stop()
+
+
+class TestNextLegGoesAtOnce:
+    """Every failure path wakes the dispatcher, as a failed webhook always did: the next leg does not wait for
+    the next tick. The tick here is a minute, so only the wake-up can send it in time."""
+
+    @pytest.mark.parametrize("settings_overrides", [{"poll_interval": 60.0}])
+    async def test_after_a_synchronous_failure(self, harness: Harness) -> None:
+        harness.stub.script("alpha", status(503))
+        background = harness.services.background
+        background.start()
+        try:
+            response = await harness.generate(await harness.new_user(tokens=10))  # wakes the dispatcher
+
+            await eventually(lambda: _attempts_are(harness, response.json()["task_id"], ["failed", "sent"]))
+        finally:
+            await background.stop()
+
+    @pytest.mark.parametrize("settings_overrides", [{"poll_interval": 60.0}])
+    async def test_after_the_watchdog(self, harness: Harness) -> None:
+        task_id = await harness.start_task(await harness.new_user(tokens=10))
+        await harness.make_overdue(task_id)
+        background = harness.services.background
+        background.start()  # the first tick of each loop: nothing to send yet, then alpha expires
+        try:
+            await eventually(lambda: _attempts_are(harness, task_id, ["failed", "sent"]))
+        finally:
+            await background.stop()
+
+
+async def _attempts_are(harness: Harness, task_id: str, statuses: list[str]) -> bool:
+    return [a["status"] for a in (await harness.task(task_id))["attempts"]] == statuses
 
 
 async def _called(harness: Harness, provider: str) -> bool:
