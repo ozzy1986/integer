@@ -86,7 +86,9 @@ export function errorText(error) {
     case 409: return "409 · Этот Idempotency-Key уже использован для другого запроса";
     case 413: return "413 · Слишком большой запрос";
     case 422: return `422 · Неверные данные: ${error.message}`;
-    case 429: return "429 · У пользователя уже 3 активные задачи — дождитесь завершения";
+    case 429: return error.message.startsWith("too many requests")
+      ? "429 · Слишком много запросов с вашего адреса — подождите минуту"
+      : "429 · У пользователя уже 3 активные задачи — дождитесь завершения";
     default: return error.status ? `${error.status} · ${error.message}` : "Сервис недоступен";
   }
 }

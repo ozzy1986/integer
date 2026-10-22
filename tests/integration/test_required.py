@@ -14,8 +14,9 @@ from tests.integration.conftest import Harness
 
 async def test_1_twenty_concurrent_identical_payment_webhooks_credit_once(harness: Harness) -> None:
     user_id = await harness.new_user(tokens=0)
+    payment_id = f"pay-same-{user_id}"
 
-    responses = await asyncio.gather(*(harness.pay(user_id, 50, payment_id="pay-same") for _ in range(20)))
+    responses = await asyncio.gather(*(harness.pay(user_id, 50, payment_id=payment_id) for _ in range(20)))
 
     assert [r.status_code for r in responses] == [200] * 20
     assert sum(r.json()["credited"] for r in responses) == 1
