@@ -1,0 +1,36 @@
+[project]
+name = "integer"
+version = "0.1.0"
+description = "Generation service: charges tokens, routes tasks through provider legs, refunds exactly once"
+requires-python = ">=3.13"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+markers = [
+    "e2e: runs against a live docker compose stack (E2E_BASE_URL)",
+]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF", "SIM", "PT"]
+ignore = [
+    "S101",  # assert is the pytest idiom
+    "RUF001", "RUF002", "RUF003",  # Cyrillic in strings/comments is intentional
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S311", "E501"]
+"migrations/**" = ["E501"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+packages = ["app", "fake_providers"]
+plugins = ["pydantic.mypy"]
