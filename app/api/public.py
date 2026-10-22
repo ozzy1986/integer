@@ -67,7 +67,7 @@ async def generate(
         user_id=body.user_id,
         model_slug=body.model_slug,
         prompt=body.prompt,
-        ref_images=tuple(str(url) for url in body.ref_images),
+        ref_images=tuple(body.ref_images),
         idempotency_key=idempotency_key,
     )
     async with services.pool.acquire() as conn:

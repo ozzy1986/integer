@@ -33,10 +33,33 @@ def _no_nul(value: str) -> str:
     return value
 
 
+# The task names no payment statuses: common spellings of the same four states are accepted, so a success
+# reported as "paid" is credited instead of rejected with 422 (and lost: the sender gives up on a 4xx).
+_PAYMENT_STATUS_ALIASES = {
+    "success": PaymentStatus.SUCCEEDED,
+    "successful": PaymentStatus.SUCCEEDED,
+    "paid": PaymentStatus.SUCCEEDED,
+    "completed": PaymentStatus.SUCCEEDED,
+    "processing": PaymentStatus.PENDING,
+    "cancelled": PaymentStatus.CANCELED,
+    "declined": PaymentStatus.FAILED,
+}
+
+
+def _payment_status(value: object) -> object:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return _PAYMENT_STATUS_ALIASES.get(normalized, normalized)
+    return value
+
+
 UserId = Annotated[int, BeforeValidator(_not_bool), Field(gt=0, lt=2**63)]
 Slug = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")]
 HttpUrl = Annotated[AnyHttpUrl, UrlConstraints(max_length=2048, allowed_schemes=["http", "https"])]
 IdempotencyKey = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")]
+# The task does not say what a reference image is (a URL, a file name, an id): any short string goes to the
+# provider as is. There is no cap on how many: the body limit bounds the list, and too many is rule 1's 400.
+RefImage = Annotated[str, Field(min_length=1, max_length=2048), AfterValidator(_no_nul)]
 
 
 class StrictModel(BaseModel):
@@ -47,7 +70,7 @@ class GenerateIn(StrictModel):
     user_id: UserId
     model_slug: Slug
     prompt: Annotated[str, Field(min_length=1, max_length=4000), AfterValidator(_no_nul)]
-    ref_images: list[HttpUrl] = Field(default_factory=list, max_length=32)
+    ref_images: list[RefImage] = Field(default_factory=list)
 
 
 class GenerateOut(BaseModel):
@@ -76,7 +99,7 @@ class PaymentWebhookIn(BaseModel):
     payment_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     user_id: UserId
     tokens: int = Field(gt=0, le=1_000_000_000)
-    status: PaymentStatus
+    status: Annotated[PaymentStatus, BeforeValidator(_payment_status)]
 
 
 class WebhookOut(BaseModel):

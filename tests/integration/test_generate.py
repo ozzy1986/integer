@@ -41,6 +41,21 @@ async def test_no_leg_accepts_that_many_references_is_400_before_charging(harnes
     assert (await harness.generate(user_id, model="video-long", refs=3)).status_code == 400
 
 
+async def test_any_number_of_references_beyond_every_leg_is_400_not_422(harness: Harness) -> None:
+    # Rule 1 promises 400 whenever no leg fits; a schema cap on the list must not turn that into 422.
+    user_id = await harness.new_user(tokens=100)
+    assert (await harness.generate(user_id, refs=50)).status_code == 400
+    assert (await harness.balance(user_id))["balance"] == 100
+
+
+async def test_references_are_not_required_to_be_urls(harness: Harness) -> None:
+    # The task does not say what a reference image is: a file name, an id or a URL all go to the provider.
+    user_id = await harness.new_user(tokens=10)
+    response = await harness.generate(user_id, ref_images=["img1.png", "s3://bucket/ref.jpg"])
+    assert response.status_code == 202
+    assert (await harness.task(response.json()["task_id"]))["ref_images"] == ["img1.png", "s3://bucket/ref.jpg"]
+
+
 async def test_not_enough_tokens_is_402_and_nothing_is_written(harness: Harness) -> None:
     user_id = await harness.new_user(tokens=24)
 
@@ -105,9 +120,10 @@ async def test_concurrent_requests_never_overdraw_the_balance(harness: Harness) 
         {"user_id": -5},
         {"user_id": 2**63},
         {"user_id": True},  # would otherwise be taken as user 1
-        {"ref_images": ["not a url"]},
-        {"ref_images": ["javascript:alert(1)"]},
+        {"ref_images": [""]},
+        {"ref_images": ["a\x00b"]},
         {"ref_images": ["https://x.example/" + "a" * 2100]},
+        {"ref_images": [42]},
         {"unexpected": "field"},
     ],
 )

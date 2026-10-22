@@ -101,6 +101,30 @@ class TestPayments:
         assert response.json() == {"credited": True}
         assert (await harness.balance(user_id))["balance"] == 5
 
+    @pytest.mark.parametrize(
+        ("sent", "stored", "credited"),
+        [
+            ("paid", "succeeded", True),
+            ("SUCCESS", "succeeded", True),
+            ("completed", "succeeded", True),
+            ("processing", "pending", False),
+            ("cancelled", "canceled", False),
+            ("declined", "failed", False),
+        ],
+    )
+    async def test_common_status_spellings_are_understood(
+        self, harness: Harness, sent: str, stored: str, credited: bool
+    ) -> None:
+        # The task names no statuses; a success under another spelling must not be rejected and lost.
+        user_id = await harness.new_user(tokens=0)
+        payment = {"payment_id": f"p-{uuid.uuid4()}", "user_id": user_id, "tokens": 5, "status": sent}
+
+        response = await harness.post_signed("/webhooks/payments", payment, PAYMENTS_SECRET)
+
+        assert response.json() == {"credited": credited}
+        async with harness.services.pool.acquire() as conn:
+            assert await conn.fetchval("SELECT status FROM payments WHERE id = $1", payment["payment_id"]) == stored
+
     async def test_late_status_after_success_does_not_undo_the_credit(self, harness: Harness) -> None:
         user_id = await harness.new_user(tokens=0)
         payment = {"payment_id": f"p-{uuid.uuid4()}", "user_id": user_id, "tokens": 5}
@@ -131,6 +155,7 @@ class TestPayments:
             {"payment_id": ""},
             {"payment_id": "a b"},
             {"user_id": 0},
+            {"status": "maybe"},
         ],
     )
     async def test_invalid_payment_is_422(self, harness: Harness, change: dict[str, object]) -> None:
