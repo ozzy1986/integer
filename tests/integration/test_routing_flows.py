@@ -1,8 +1,10 @@
 """Rules 2-5 end to end through the engine: moderation, payload, sync errors, watchdog, races."""
 
 import asyncio
+import uuid
 from typing import Any
 
+import asyncpg
 import httpx
 import pytest
 
@@ -58,6 +60,27 @@ async def test_fallback_leg_must_accept_the_references(harness: Harness) -> None
     response = await harness.fail("beta", (await harness.live_attempt(task_id))["id"])
 
     assert response.json()["outcome"] == "task_failed"
+
+
+async def test_a_model_that_lost_its_legs_fails_with_a_refund(harness: Harness, pool: asyncpg.Pool) -> None:
+    # The catalog changed under a running task: there is nowhere to go next, which is rule 4, not a 500.
+    slug = f"orphan-{uuid.uuid4().hex[:8]}"
+    await pool.execute("INSERT INTO models (slug, price) VALUES ($1, 2)", slug)
+    await pool.execute(
+        "INSERT INTO legs (model_slug, priority, provider, max_ref_images) VALUES ($1, 1, 'alpha', 4)", slug
+    )
+    try:
+        user_id = await harness.new_user(tokens=10)
+        task_id = await harness.start_task(user_id, model=slug)
+        attempt = await harness.live_attempt(task_id)
+        await pool.execute("DELETE FROM legs WHERE model_slug = $1", slug)
+
+        response = await harness.fail("alpha", attempt["id"])
+
+        assert (response.status_code, response.json()["outcome"]) == (200, "task_failed")
+        assert await harness.ledger_kinds(user_id) == ["payment", "charge", "refund"]
+    finally:
+        await pool.execute("DELETE FROM legs WHERE model_slug = $1", slug)
 
 
 async def test_alpha_is_skipped_when_it_cannot_take_the_references(harness: Harness) -> None:
@@ -183,6 +206,34 @@ class TestWatchdog:
 
         assert sum(expired) == 1
         assert len((await harness.task(task_id))["attempts"]) == 2
+
+    async def test_watchdogs_of_all_workers_share_a_backlog(self, harness: Harness) -> None:
+        # Each worker must take the next attempt nobody is busy with, not queue up behind the same rows.
+        backlog = 41  # more than one watchdog pass used to take
+        users = [await harness.new_user(tokens=10) for _ in range(backlog)]
+        tasks = [(await harness.generate(user_id)).json()["task_id"] for user_id in users]
+        while await harness.dispatch():
+            pass
+        for task_id in tasks:
+            await harness.make_overdue(task_id)
+
+        expired = await asyncio.gather(harness.watchdog(), harness.watchdog())
+
+        assert sum(expired) == backlog
+        attempts = [len((await harness.task(task_id))["attempts"]) for task_id in tasks]
+        assert attempts == [2] * backlog
+
+    async def test_holding_a_task_does_not_block_rows_that_merely_reference_it(self, harness: Harness) -> None:
+        # The state machine locks a task to change its columns, never its key: FOR NO KEY UPDATE, so a
+        # foreign-key check from another transaction (KEY SHARE) does not have to wait for it.
+        user_id = await harness.new_user(tokens=10)
+        task_id = await harness.start_task(user_id)
+        attempt_id = uuid.UUID((await harness.live_attempt(task_id))["id"])
+        async with harness.services.pool.acquire() as holder, holder.transaction():
+            assert await engine._lock(holder, attempt_id) is not None
+            async with harness.services.pool.acquire() as other, other.transaction():
+                await other.execute("SET LOCAL lock_timeout = '1s'")
+                await other.execute("INSERT INTO task_events (task_id, kind) VALUES ($1, 'probe')", uuid.UUID(task_id))
 
     async def test_failure_webhook_racing_the_watchdog_counts_once(self, harness: Harness) -> None:
         user_id = await harness.new_user(tokens=10)

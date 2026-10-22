@@ -4,16 +4,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
-from pydantic import (
-    AfterValidator,
-    AnyHttpUrl,
-    BaseModel,
-    BeforeValidator,
-    ConfigDict,
-    Field,
-    UrlConstraints,
-    model_validator,
-)
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from app.billing import PaymentStatus
 from app.domain import AttemptStatus, ProviderError, TaskStatus
@@ -55,11 +46,10 @@ def _payment_status(value: object) -> object:
 
 UserId = Annotated[int, BeforeValidator(_not_bool), Field(gt=0, lt=2**63)]
 Slug = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")]
-HttpUrl = Annotated[AnyHttpUrl, UrlConstraints(max_length=2048, allowed_schemes=["http", "https"])]
 IdempotencyKey = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")]
-# The task does not say what a reference image is (a URL, a file name, an id): any short string goes to the
-# provider as is. There is no cap on how many: the body limit bounds the list, and too many is rule 1's 400.
-RefImage = Annotated[str, Field(min_length=1, max_length=2048), AfterValidator(_no_nul)]
+# A reference image or a provider's result: the task fixes no format (a URL of any scheme, a file name, an
+# id), so any short string is passed on as is. Whoever renders one as a link checks its scheme (the UI does).
+Reference = Annotated[str, Field(min_length=1, max_length=2048), AfterValidator(_no_nul)]
 
 
 class StrictModel(BaseModel):
@@ -70,7 +60,8 @@ class GenerateIn(StrictModel):
     user_id: UserId
     model_slug: Slug
     prompt: Annotated[str, Field(min_length=1, max_length=4000), AfterValidator(_no_nul)]
-    ref_images: list[RefImage] = Field(default_factory=list)
+    # No cap on how many: the body limit bounds the list, and more than any leg takes is rule 1's 400.
+    ref_images: list[Reference] = Field(default_factory=list)
 
 
 class GenerateOut(BaseModel):
@@ -83,7 +74,8 @@ class ProviderWebhookIn(BaseModel):
     attempt_id: UUID
     external_id: str | None = Field(None, max_length=128)
     status: Literal["completed", "failed"]
-    result_url: HttpUrl | None = None
+    # Rejecting a signed s3:// result would make the provider stop retrying and lose a finished job.
+    result_url: Reference | None = None
     error_type: ProviderError | None = None
 
     @model_validator(mode="after")

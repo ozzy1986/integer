@@ -91,8 +91,9 @@ class TestRule6LateCompleted:
         assert response.json()["outcome"] == "late_result_accepted"
         task = await harness.task(task_id)
         assert (task["status"], task["result_url"]) == ("succeeded", "https://cdn.example/late.png")
-        statuses = {a["provider"]: (a["status"], a["reason"]) for a in task["attempts"]}
-        assert statuses == {"alpha": ("succeeded", "watchdog_timeout"), "beta": ("superseded", None)}
+        statuses = {a["provider"]: (a["status"], a["error"], a["reason"]) for a in task["attempts"]}
+        # The reason keeps the story (the watchdog gave up first); an error type on a success would not.
+        assert statuses == {"alpha": ("succeeded", None, "watchdog_timeout"), "beta": ("superseded", None, None)}
         # The superseded attempt's own result changes nothing.
         assert (await harness.complete("beta", beta["id"])).json()["outcome"] == "ignored"
         assert await harness.ledger_kinds(user_id) == ["payment", "charge"]

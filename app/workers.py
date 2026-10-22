@@ -8,7 +8,6 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from uuid import UUID
 
 import asyncpg
 
@@ -101,19 +100,14 @@ class Watchdog:
         self._pool = pool
 
     async def run_once(self) -> int:
-        overdue: list[UUID] = [
-            row["id"]
-            for row in await self._pool.fetch(
-                "SELECT id FROM attempts WHERE status = 'sent' AND deadline_at < now() ORDER BY deadline_at LIMIT $1",
-                BATCH_SIZE,
-            )
-        ]
+        """Expire overdue attempts, one transaction each, until none is left that nobody else is busy with."""
         expired = 0
-        for attempt_id in overdue:
+        while True:
             async with self._pool.acquire() as conn:
-                if await engine.expire_attempt(conn, attempt_id) is not engine.Outcome.IGNORED:
-                    expired += 1
-        return expired
+                outcome = await engine.expire_next_overdue(conn)
+            if outcome is None:
+                return expired
+            expired += outcome is not engine.Outcome.IGNORED
 
 
 class BackgroundLoop:

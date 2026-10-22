@@ -18,10 +18,10 @@ async def provider_webhook(name: str, request: Request, services: ServicesDep) -
 
     async with services.pool.acquire() as conn:
         if payload.status == "completed":
-            assert payload.result_url is not None
-            outcome = await engine.complete_attempt(conn, payload.attempt_id, str(payload.result_url), provider=name)
+            assert payload.result_url is not None  # type narrowing: the model validator requires it
+            outcome = await engine.complete_attempt(conn, payload.attempt_id, payload.result_url, provider=name)
         else:
-            assert payload.error_type is not None
+            assert payload.error_type is not None  # type narrowing: the model validator requires it
             outcome = await engine.fail_attempt(conn, payload.attempt_id, payload.error_type, "webhook", provider=name)
 
     if outcome is engine.Outcome.UNKNOWN:

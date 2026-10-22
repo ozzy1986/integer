@@ -51,7 +51,8 @@ class TestProviderWebhookSecurity:
             {"status": "failed"},  # no error_type
             {"status": "failed", "error_type": "cosmic-rays"},
             {"status": "exploded"},
-            {"status": "completed", "result_url": "ftp://x.example/r"},
+            {"status": "completed", "result_url": ""},
+            {"status": "completed", "result_url": "https://x.example/\x00"},
         ],
     )
     async def test_malformed_payload_is_422(self, harness: Harness, payload: dict[str, str]) -> None:
@@ -59,6 +60,18 @@ class TestProviderWebhookSecurity:
         task_id = await harness.start_task(user_id)
         attempt = await harness.live_attempt(task_id)
         assert (await harness.webhook("alpha", attempt["id"], **payload)).status_code == 422
+
+    async def test_a_result_link_is_not_required_to_be_http(self, harness: Harness) -> None:
+        # Rejecting a signed s3:// result with 422 would make the provider stop retrying: the job is done,
+        # but the watchdog would later refund it as if it had failed.
+        user_id = await harness.new_user(tokens=10)
+        task_id = await harness.start_task(user_id)
+        attempt = await harness.live_attempt(task_id)
+
+        response = await harness.complete("alpha", attempt["id"], url="s3://results/r.png")
+
+        assert response.json()["outcome"] == "task_succeeded"
+        assert (await harness.task(task_id))["result_url"] == "s3://results/r.png"
 
     async def test_invalid_json_with_valid_signature_is_422(self, harness: Harness) -> None:
         body = b"{not json"

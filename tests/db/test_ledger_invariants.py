@@ -125,6 +125,36 @@ async def test_task_is_charged_once_and_refunded_once_for_the_exact_price(pool: 
         assert await balance(conn, user_id) == 10
 
 
+async def test_a_task_is_charged_to_its_own_user_only(pool: asyncpg.Pool) -> None:
+    async with pool.acquire() as conn:
+        owner, stranger = await make_user(conn), await make_user(conn)
+        await credit(conn, stranger, 10)
+        task_id = await make_task(conn, owner)
+        with pytest.raises(asyncpg.ForeignKeyViolationError):
+            await conn.execute(
+                "INSERT INTO ledger (user_id, kind, amount, task_id) VALUES ($1, 'charge', -2, $2)",
+                stranger,
+                task_id,
+            )
+        assert await balance(conn, stranger) == 10
+
+
+async def test_only_a_failed_attempt_has_an_error_type(pool: asyncpg.Pool) -> None:
+    async with pool.acquire() as conn:
+        task_id = await make_task(conn, await make_user(conn))
+        attempt_id = await conn.fetchval(
+            "INSERT INTO attempts (task_id, number, leg_priority, provider) VALUES ($1, 1, 1, 'alpha') RETURNING id",
+            task_id,
+        )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute("UPDATE attempts SET status = 'failed' WHERE id = $1", attempt_id)
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute(
+                "UPDATE attempts SET status = 'succeeded', error = 'technical', result_url = 'r' WHERE id = $1",
+                attempt_id,
+            )
+
+
 async def test_refund_requires_a_charge(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         user_id = await make_user(conn)

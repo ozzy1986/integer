@@ -1,7 +1,7 @@
 """Task state machine: the only place where tasks and attempts change state.
 
 Concurrency model: every change of a task or its attempts happens in one transaction that first locks
-the task row (SELECT ... FOR UPDATE). Webhooks, the dispatcher and the watchdog of any worker therefore
+the task row (SELECT ... FOR NO KEY UPDATE). Webhooks, the dispatcher and the watchdog of any worker therefore
 serialise per task, and each re-reads the attempt *after* taking the lock, so a duplicate sees the
 already-applied result and becomes a no-op. Money rows are additionally protected by unique indexes.
 
@@ -198,10 +198,20 @@ async def fail_attempt(
         return await _handle_failure(conn, locked, error, reason)
 
 
-async def expire_attempt(conn: Connection, attempt_id: UUID) -> Outcome:
-    """Watchdog (rule 5). Skips tasks another worker is busy with; re-checks the deadline under the lock."""
+async def expire_next_overdue(conn: Connection) -> Outcome | None:
+    """Watchdog (rule 5): fail the most overdue attempt whose task nobody else is busy with; None if there is
+    none. SKIP LOCKED lets the watchdogs of all workers share a backlog instead of queueing on the same rows."""
     async with conn.transaction():
-        locked = await _lock(conn, attempt_id, skip_locked=True)
+        attempt_id = await conn.fetchval(
+            """SELECT a.id FROM attempts a JOIN tasks t ON t.id = a.task_id
+                WHERE a.status = 'sent' AND a.deadline_at < now()
+                ORDER BY a.deadline_at LIMIT 1
+                  FOR NO KEY UPDATE OF t SKIP LOCKED"""
+        )
+        if attempt_id is None:
+            return None
+        # The lock is ours already; this re-reads the attempt as the previous lock holder left it.
+        locked = await _lock(conn, attempt_id)
         if locked is None or locked.status is not AttemptStatus.SENT or not locked.deadline_passed:
             return Outcome.IGNORED
         return await _handle_failure(conn, locked, ProviderError.TECHNICAL, "watchdog_timeout")
@@ -225,9 +235,10 @@ async def complete_attempt(
             return Outcome.LATE_RESULT_IGNORED
 
         late = locked.status not in LIVE_ATTEMPT_STATUSES
+        # A late result clears the error the watchdog set; `reason` still tells that it gave up first.
         await conn.execute(
-            "UPDATE attempts SET status = 'succeeded', result_url = $2, finished_at = now(), lease_until = NULL "
-            "WHERE id = $1",
+            "UPDATE attempts SET status = 'succeeded', result_url = $2, error = NULL, finished_at = now(), "
+            "lease_until = NULL WHERE id = $1",
             attempt_id, result_url,
         )  # fmt: skip
         superseded = await conn.fetch(
@@ -253,9 +264,9 @@ async def _handle_failure(conn: Connection, locked: _Locked, error: ProviderErro
     )  # fmt: skip
     await _event(conn, locked.task_id, locked.attempt_id, "attempt_failed", error=error, reason=reason)
 
+    # The catalog may have changed under a running task; a model left without legs has nowhere to go next.
     model = await catalog.get_model(conn, locked.model_slug)
-    assert model is not None  # tasks reference models
-    leg = next_leg(model.legs, locked.ref_count, locked.leg_priority, error)
+    leg = next_leg(model.legs if model else (), locked.ref_count, locked.leg_priority, error)
     if leg is not None:
         await _new_attempt(conn, locked.task_id, locked.number + 1, leg)
         return Outcome.NEXT_ATTEMPT
@@ -272,15 +283,16 @@ async def _handle_failure(conn: Connection, locked: _Locked, error: ProviderErro
     return Outcome.TASK_FAILED
 
 
-async def _lock(
-    conn: Connection, attempt_id: UUID, *, provider: str | None = None, skip_locked: bool = False
-) -> _Locked | None:
+async def _lock(conn: Connection, attempt_id: UUID, *, provider: str | None = None) -> _Locked | None:
     """Lock the attempt's task, then read the attempt. Two statements on purpose: under READ COMMITTED
-    the second one sees whatever the previous lock holder committed."""
+    the second one sees whatever the previous lock holder committed.
+
+    FOR NO KEY UPDATE, not FOR UPDATE: transitions change columns, never the key, so foreign-key checks of
+    rows that merely reference the task (KEY SHARE) need not wait for a transition to finish."""
     task = await conn.fetchrow(
-        f"""SELECT id, user_id, model_slug, status, price, cardinality(ref_images) AS ref_count
-              FROM tasks WHERE id = (SELECT task_id FROM attempts WHERE id = $1)
-               FOR UPDATE{" SKIP LOCKED" if skip_locked else ""}""",  # noqa: S608 - constant fragment
+        """SELECT id, user_id, model_slug, status, price, cardinality(ref_images) AS ref_count
+             FROM tasks WHERE id = (SELECT task_id FROM attempts WHERE id = $1)
+              FOR NO KEY UPDATE""",
         attempt_id,
     )
     if task is None:
