@@ -48,7 +48,7 @@ docker compose up
 curl -s localhost:8000/demo/topup -H 'Content-Type: application/json' -d '{"user_id": 42, "tokens": 50, "copies": 20}'
 # заказать генерацию
 curl -s localhost:8000/generate -H 'Content-Type: application/json' \
-  -d '{"user_id": 42, "model_slug": "image-fast", "prompt": "кот в шляпе", "ref_images": []}'
+  -d '{"user_id": 42, "model_slug": "image-fast", "prompt": "a cat in a hat", "ref_images": []}'
 # посмотреть задачу и баланс
 curl -s localhost:8000/tasks/<task_id>
 curl -s localhost:8000/users/42/balance
@@ -63,11 +63,19 @@ docker compose up -d --wait
 docker compose run --rm tests
 ```
 
-Без Docker (нужен PostgreSQL и база, имя которой оканчивается на `_test`):
+Прогон занимает около трёх минут: e2e-тест правила 6 честно ждёт настоящий `PROVIDER_TIMEOUT = 60 с`, чтобы
+сработал сторож. Только обязательные сценарии:
+
+```bash
+docker compose run --rm tests pytest -q tests/integration/test_required.py tests/e2e
+```
+
+Без Docker (нужен PostgreSQL 15+, суперпользователь — тесты создают роль сервиса `integer_app` и работают от
+её имени — и база, имя которой оканчивается на `_test`):
 
 ```bash
 pip install -r requirements-dev.txt
-TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/integer_test pytest
+TEST_DATABASE_URL=postgresql://postgres@localhost:5432/integer_test pytest
 ruff check . && ruff format --check . && mypy
 ```
 
@@ -92,18 +100,18 @@ ruff check . && ruff format --check . && mypy
    задача уже вернула деньги).
 
 Кроме них проверены гонки за лимит активных задач и за баланс, параллельные сторожа и диспетчеры,
-вебхук, обогнавший ответ `202`, повторная отправка после падения диспетчера, ошибки API и безопасность
-вебхуков. В конце каждой тестовой сессии проверяется, что ни у одного пользователя баланс не разошёлся с
-журналом. CI ([GitHub Actions](.github/workflows/ci.yml)) гоняет всё это на каждый пуш, вторым заданием —
-внутри `docker compose`.
+вебхук, обогнавший ответ `202`, повторная отправка после падения диспетчера, обрыв соединения посреди
+вебхука, ошибки API и безопасность вебхуков. В конце каждой тестовой сессии проверяется, что ни у одного
+пользователя баланс не разошёлся с журналом. CI ([GitHub Actions](.github/workflows/ci.yml)) гоняет всё это
+на каждый пуш, вторым заданием — внутри `docker compose`.
 
 ## API
 
 | Запрос | Что делает |
 |---|---|
 | `POST /generate` | `{user_id, model_slug, prompt, ref_images}` → `202 {task_id}`. Списывает цену, создаёт задачу, отправляет на первую подходящую ногу. `400` — ни одна нога не принимает столько референсов (до списания), `402` — не хватает токенов, `429` — уже 3 активные задачи (или превышен `RATE_LIMIT_PER_MINUTE`, если он включён), `404` — нет модели, `422` — неверные данные. Необязательный заголовок `Idempotency-Key`: повтор с тем же ключом вернёт ту же задачу (`200`) без второго списания, с другим телом — `409` |
-| `POST /webhooks/providers/{name}` | результат от провайдера: `{attempt_id, external_id, status: completed\|failed, result_url \| error_type}`, подпись `X-Signature` |
-| `POST /webhooks/payments` | `{payment_id, user_id, tokens, status}` с той же подписью; начисление только при успехе (`succeeded`, а также `paid`, `success`, `completed`), ровно один раз |
+| `POST /webhooks/providers/{name}` | результат от провайдера: `{attempt_id \| external_id, status: completed\|failed, result_url \| error_type}`, подпись `X-Signature`. Дубль отвечает `200 {"outcome": "ignored"}`, чтобы провайдер перестал повторять |
+| `POST /webhooks/payments` | `{payment_id, user_id, tokens, status}` с той же подписью; начисление только при успехе (`succeeded`, а также `paid`, `success`, `completed`), ровно один раз. `payment_id` — строка до 128 символов или число |
 | `GET /tasks/{id}` | статус, текущая нога, история попыток (провайдер, тип ошибки, причина, времена, дедлайн сторожа) и журнал событий задачи |
 | `GET /users/{id}/balance?limit=` | баланс и последние строки журнала (по умолчанию 20) |
 | `GET /users/{id}/tasks` | задачи пользователя — для интерфейса |
@@ -111,9 +119,19 @@ ruff check . && ruff format --check . && mypy
 | `GET /health`, `GET /health/invariants` | живость; число пользователей, у которых баланс ≠ сумме журнала (всегда 0; пересчёт не чаще раза в 10 с) |
 | `POST /demo/topup` | только для демо (включается `DEMO_PAYMENTS_URL`): просит фейковый платёжный провайдер прислать подписанные вебхуки оплаты, в том числе N копий одновременно |
 
-Подпись: `X-Signature` = hex HMAC-SHA256 сырого тела. У каждого провайдера и у платёжного провайдера свой
-секрет; провайдер может сообщать только о своих попытках. Если нужен один общий секрет, как в формулировке
-задания, задайте `ALPHA_SECRET`, `BETA_SECRET` и `PAYMENTS_SECRET` одинаковыми.
+Подпись: `X-Signature` = hex HMAC-SHA256 сырого тела с общим секретом отправителя и сервиса. Секрет задаётся
+для каждого отправителя (`ALPHA_SECRET`, `BETA_SECRET`, `PAYMENTS_SECRET`): из коробки у всех трёх одно
+dev-значение — один общий секрет, как в задании; на сервере они разные, и утёкший секрет alpha не позволит ни
+подписать оплату, ни отчитаться за beta. Провайдер в любом случае сообщает только о своих попытках.
+
+Попытку вебхук называет по `attempt_id` — сервис передаёт его в `POST /tasks`, поэтому он работает, даже если
+ответ `202` потерялся (таймаут), — или по `external_id` из этого ответа. Вебхук вручную:
+
+```bash
+BODY='{"payment_id": "manual-1", "user_id": 42, "tokens": 30, "status": "succeeded"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac dev-only-shared-webhook-secret-000000000 | sed 's/.* //')
+curl -s localhost:8000/webhooks/payments -H "X-Signature: $SIG" -d "$BODY"   # {"credited":true}, повтор — false
+```
 
 ## Как это устроено
 
@@ -254,11 +272,12 @@ DATABASE_URL=postgresql://<владелец>@… APP_DB_PASSWORD=… python migr
 alembic downgrade -1                                    # откатить последнюю
 ```
 
-Как добавить следующую:
+Как добавить следующую (так добавлена, например, [`0006`](migrations/versions/0006_attempts_by_external_id.py) —
+индекс для вебхуков по `external_id`):
 
 ```bash
-alembic revision -m "add task priority" --rev-id 0006
-# заполнить upgrade()/downgrade() в migrations/versions/0006_add_task_priority.py, затем:
+alembic revision -m "add task priority" --rev-id 0007
+# заполнить upgrade()/downgrade() в migrations/versions/0007_add_task_priority.py, затем:
 alembic upgrade head
 ```
 
@@ -281,6 +300,13 @@ alembic upgrade head
  "duplicates": 2, "duplicates_concurrent": true, "drop_rate": 0.05, "late_rate": 0.1, "late_delay": 75}
 ```
 
+```bash
+# при старте — для обоих провайдеров
+FAKE_DEFAULT_BEHAVIOUR='{"fail_rate": 0.2, "fail_type": "moderation"}' docker compose up -d
+# на лету — для одного; порт фейков наружу не открыт, поэтому изнутри контейнера
+docker compose exec fake-providers python -c "import httpx, os; print(httpx.put('http://127.0.0.1:9000/alpha/behaviour', json={'sync_fail_rate': 1, 'sync_fail': '503'}, headers={'X-Control-Token': os.environ['FAKE_CONTROL_TOKEN']}).text)"
+```
+
 А для одной задачи — директивами в промпте (сервис их не разбирает, просто передаёт промпт; так тест или
 интерфейс задаёт сценарий одной задачи и не мешает параллельным):
 
@@ -297,8 +323,8 @@ alembic upgrade head
 ## Безопасность
 
 - Вебхуки: HMAC-SHA256 сырого тела проверяется **до** разбора JSON, сравнение за постоянное время. У каждого
-  отправителя свой секрет, провайдер не может завершить чужую попытку. Секреты короче 32 символов
-  отвергаются при старте.
+  отправителя может быть свой секрет (на сервере так и есть), провайдер не может завершить чужую попытку.
+  Секреты короче 32 символов отвергаются при старте.
 - Строгая валидация: лишние поля → `422`, ограничены длины промпта и каждого референса,
   диапазоны чисел — и в теле, и в пути (`/users/{id}`). `true` вместо ID и NUL-символ (его не хранит
   PostgreSQL) — тоже `422`, а не `500`. Тело запроса ограничено (64 КБ) ещё до чтения — `413`.
@@ -349,8 +375,11 @@ alembic upgrade head
 - **Статусы оплаты:** `succeeded`, `pending`, `failed`, `canceled` и их частые написания (`paid`, `success`,
   `completed`, `processing`, `cancelled`, `declined`, регистр не важен). Задание статусы не называет, а
   отклонённый `422` успех провайдер бы больше не прислал. Неизвестный статус — `422`.
-- **Свой секрет у каждого отправителя** — чтобы alpha не могла подписать оплату или завершить попытку
-  beta. Общий секрет из задания — частный случай: одинаковые значения в `.env`.
+- **Идентификаторы чужих систем — в любом формате.** `payment_id` и `external_id` — любая строка до 128
+  символов без NUL или число (42 и `"42"` — один и тот же платёж). Вебхук, отвергнутый с `422`, отправитель не
+  повторяет: строгий формат означал бы потерянную оплату или результат.
+- **Секрет — у каждого отправителя свой**, чтобы alpha не могла подписать оплату или отчитаться за beta.
+  Общий секрет из задания — частный случай, он и стоит в dev-конфигурации: одинаковые значения.
 - **Регистрации нет**, пользователь появляется при первой оплате или заказе. Неизвестный пользователь в
   `GET /balance` — это баланс 0 без строк журнала, а не `404`.
 - **Отказ `payload` тоже возвращает деньги.** Правило «любая `failed`-задача = ровно один возврат» проще и

@@ -5,9 +5,11 @@
 # Anywhere real, put your own values into .env (see .env.example); deploy/ does that on the server.
 name: integer
 
+# Out of the box every webhook sender signs with one shared dev secret, as the task puts it. Anywhere real each
+# sender gets its own (.env), so a leaked alpha secret can neither sign a payment nor report for beta.
 x-secrets: &secrets
-  PROVIDER_SECRETS: '{"alpha": "${ALPHA_SECRET:-dev-only-alpha-webhook-secret-0000000000}", "beta": "${BETA_SECRET:-dev-only-beta-webhook-secret-00000000000}"}'
-  PAYMENTS_SECRET: ${PAYMENTS_SECRET:-dev-only-payments-webhook-secret-00000000}
+  PROVIDER_SECRETS: '{"alpha": "${ALPHA_SECRET:-dev-only-shared-webhook-secret-000000000}", "beta": "${BETA_SECRET:-dev-only-shared-webhook-secret-000000000}"}'
+  PAYMENTS_SECRET: ${PAYMENTS_SECRET:-dev-only-shared-webhook-secret-000000000}
 
 x-service-env: &service-env
   <<: *secrets
