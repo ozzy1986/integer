@@ -1,5 +1,5 @@
 # One image for the service, the migrations and the fake providers; the `test` stage adds test tooling.
-FROM python:3.13-slim AS runtime
+FROM python:3.15-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
